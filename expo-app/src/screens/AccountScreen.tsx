@@ -27,7 +27,7 @@ export function AccountScreen() {
       <Section title={`Merhaba ${customer.firstName}`}>
         <Text style={styles.muted}>Müşteri numarası: {customer.selwiseId}</Text>
         <Text style={[styles.muted, { marginTop: 4 }]}>
-          Kimlik: {customer.selwiseIdHash ? `imzalı (${customer.selwiseIdHash.slice(0, 12)}…)` : 'imzasız — mağazada SELWISE_IDENTITY_SECRET yok'}
+          Kimlik: {customer.selwiseSignature ? `imzalı (${customer.selwiseSignature.userHash.slice(0, 12)}…)` : 'imzasız — mağazada SELWISE_IDENTITY_SECRET yok'}
         </Text>
         <View style={{ marginTop: 16 }}>
           <Button kind="outline" label="Çıkış yap" onPress={() => void signOut()} />

@@ -7,7 +7,6 @@ Bu kit **müşteri projesine elle uygulanmak** üzere yazıldı: dosyalar bu rep
 durur, ilgili Akinon projesine kopyalanır. Hiçbir parçası Selwise sunucusunda
 değişiklik gerektirmez — hepsi bugünkü API ve panel yetenekleriyle çalışır.
 
-
 ---
 
 ## Hangi çalışma zamanı?
@@ -16,7 +15,7 @@ değişiklik gerektirmez — hepsi bugünkü API ve panel yetenekleriyle çalı�
 |---|---|---|
 | `manage.py` var | Project Zero (Django) | [`pz-classic/`](./pz-classic) |
 | `@akinon/next` bağımlılığı | PZ Next | [`pz-next/`](./pz-next) |
-| `react-native` bağımlılığı | Appmaker | [`@selwise/react-native`](../react-native) |
+| `react-native` bağımlılığı | Appmaker | [`@selwise/react-native`](https://www.npmjs.com/package/@selwise/react-native) |
 
 Ortak parçalar: [`shared/`](./shared)
 
@@ -246,7 +245,7 @@ düşmek staging ziyaretini üretim cirosu olarak kaydeder.
 
 ## Kurulum: Appmaker (React Native)
 
-Ayrı paket: [`@selwise/react-native`](../react-native) — kurulum,
+Ayrı paket: [`@selwise/react-native`](https://www.npmjs.com/package/@selwise/react-native) — kurulum,
 API anahtarı scope'ları, ekran adlandırma ve WebView köprüsü orada anlatılıyor.
 
 Üç şey burada da vurgulanmalı:

@@ -17,7 +17,7 @@ import type { TrafficSource } from './traffic-source.js';
  * The one list the ingest path (`LivePresenceWriter`), the live read and the
  * dashboard's Live View agree on: what "live" means, which events move a
  * visitor to which stage, and how long each record lives. Nothing restates
- * these numbers (Selwise's architecture notes → "The live layer").
+ * these numbers.
  *
  * Deliberately dependency-free and published as its own subpath
  * (`@selwise/tracking-contract/live-presence`), like `consent-categories`: the
@@ -305,7 +305,7 @@ export interface LiveMoney {
   orders: number;
 }
 
-/** A product sold today, by its feed code (`item_code`). */
+/** A product sold today, by the code its order lines carry; `name` is the catalogue title, else the line's. */
 export interface LiveTodayProduct {
   code: string | null;
   name: string | null;

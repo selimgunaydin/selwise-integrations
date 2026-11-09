@@ -23,19 +23,25 @@ import { grantConsent, OPEN_STORE_CONSENT_EVENT, revokeConsent, withSelwise, typ
 
 const STORAGE_KEY = 'ardisa_cookie_choice';
 
-type Choice = Pick<ConsentState, 'analytics' | 'marketing' | 'preferences'> & { at: string };
+/** The optional categories — `necessary` is always on and never asked. */
+type ConsentChoice = Pick<ConsentState, 'analytics' | 'marketing' | 'preferences'>;
+type SavedChoice = ConsentChoice & { at: string };
 
-function readChoice(): Choice | null {
+function readChoice(): SavedChoice | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Choice) : null;
+    return raw ? (JSON.parse(raw) as SavedChoice) : null;
   } catch {
     return null;
   }
 }
 
-/** Hand the store's decision to Selwise. Every category is named: a partial object leaves the unnamed ones granted. */
-function applyToSelwise(choice: Pick<ConsentState, 'analytics' | 'marketing' | 'preferences'>) {
+/**
+ * Hand the store's decision to Selwise. Every category is named (a partial
+ * object leaves the unnamed ones granted), and only the categories travel —
+ * not the store's own `at`.
+ */
+function applyToSelwise(choice: ConsentChoice) {
   if (!choice.analytics && !choice.marketing && !choice.preferences) {
     revokeConsent();
     return;
@@ -46,7 +52,7 @@ function applyToSelwise(choice: Pick<ConsentState, 'analytics' | 'marketing' | '
 export function StoreConsentBanner() {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState(false);
-  const [draft, setDraft] = useState({ analytics: true, marketing: false, preferences: true });
+  const [draft, setDraft] = useState<ConsentChoice>({ analytics: true, marketing: false, preferences: true });
 
   useEffect(() => {
     const saved = readChoice();
@@ -73,7 +79,7 @@ export function StoreConsentBanner() {
     return () => window.removeEventListener(OPEN_STORE_CONSENT_EVENT, reopen);
   }, []);
 
-  const decide = useCallback((choice: Pick<ConsentState, 'analytics' | 'marketing' | 'preferences'>) => {
+  const decide = useCallback((choice: ConsentChoice) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...choice, at: new Date().toISOString() }));
     } catch {

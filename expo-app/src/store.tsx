@@ -17,8 +17,8 @@ export interface Customer {
   selwiseId: string;
   email: string;
   firstName: string;
-  selwiseIdHash: string | null;
-  selwiseIdHashTs: number | null;
+  /** The store server's signature of `selwiseId` — null when it has no identity secret. */
+  selwiseSignature: { userHash: string; userHashTs: number } | null;
 }
 
 interface StoreValue {
@@ -43,15 +43,16 @@ export function useStore() {
   return v;
 }
 
-const round = (n: number) => Math.round(n * 100) / 100;
+/** The basket's worth (after discounts, before shipping) and its units — what the screen shows and what Selwise is told. */
+function summarize(lines: CartLine[]) {
+  return {
+    total: Math.round(lines.reduce((s, l) => s + l.product.price * l.qty, 0) * 100) / 100,
+    itemCount: lines.reduce((s, l) => s + l.qty, 0),
+  };
+}
 
 function report(lines: CartLine[]) {
-  selwise.setCart({
-    total: round(lines.reduce((s, l) => s + l.product.price * l.qty, 0)),
-    itemCount: lines.reduce((s, l) => s + l.qty, 0),
-    currency: CURRENCY,
-    codes: lines.map((l) => l.product.itemCode),
-  });
+  selwise.setCart({ ...summarize(lines), currency: CURRENCY, codes: lines.map((l) => l.product.itemCode) });
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -100,11 +101,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const body = (await res.json()) as { user?: Customer; error?: string };
       if (!res.ok || !body.user) return body.error || `Giriş başarısız (HTTP ${res.status})`;
       const u = body.user;
-      await selwise.identify(
-        u.selwiseId,
-        { email: u.email, firstName: u.firstName },
-        u.selwiseIdHash && u.selwiseIdHashTs ? { userHash: u.selwiseIdHash, userHashTs: u.selwiseIdHashTs } : undefined,
-      );
+      await selwise.identify(u.selwiseId, { email: u.email, firstName: u.firstName }, u.selwiseSignature ?? undefined);
       setCustomer(u);
       return null;
     } catch (e) {
@@ -120,8 +117,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value = useMemo<StoreValue>(
     () => ({
       lines,
-      total: round(lines.reduce((s, l) => s + l.product.price * l.qty, 0)),
-      itemCount: lines.reduce((s, l) => s + l.qty, 0),
+      ...summarize(lines),
       add,
       remove,
       clear,

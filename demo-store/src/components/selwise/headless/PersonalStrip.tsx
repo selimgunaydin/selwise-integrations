@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { selwiseInstance, withSelwise } from '@/lib/selwise/client';
+import { consentedVisitor, postJson, publicSiteUrl, withSelwise } from '@/lib/selwise/client';
 import { HeadlessCard, type HeadlessProduct } from './HeadlessCard';
 
 /**
@@ -27,45 +27,27 @@ interface Props {
   siteKey: string;
   widgetId: string;
   title: string;
-  currentProductId?: string;
   lang?: string;
 }
 
 type Status = 'loading' | 'ready' | 'empty' | 'error';
 
-function visitorContext() {
-  const s = selwiseInstance();
-  const consent = s?.getConsentState?.();
-  const marketing = Boolean(consent?.marketing);
-  if (!s || !marketing) return { marketing: false as const };
-  return {
-    marketing: true as const,
-    visitorId: s.getVisitorId?.(),
-    sessionId: s.getSessionId?.(),
-    userId: s.getSiteUserId?.() || undefined,
-    journeyId: s.getJourneyState?.().journeyId || undefined,
-  };
-}
-
-export function PersonalStrip({ apiUrl, siteKey, widgetId, title, currentProductId, lang }: Props) {
+export function PersonalStrip({ apiUrl, siteKey, widgetId, title, lang }: Props) {
   const [products, setProducts] = useState<HeadlessProduct[]>([]);
   const [status, setStatus] = useState<Status>('loading');
   const [note, setNote] = useState('');
   const impressionSent = useRef(false);
-  const base = `${apiUrl}/public/sites/${encodeURIComponent(siteKey)}`;
+  const base = publicSiteUrl(apiUrl, siteKey);
 
   useEffect(() => {
     const controller = new AbortController();
     const stop = withSelwise(() => {
-      const ctx = visitorContext();
-      setNote(ctx.marketing ? 'Ziyaretçiye özel (pazarlama izni var).' : 'Anonim: pazarlama izni yok, ziyaretçi gönderilmedi ve ölçülmüyor.');
+      const visitor = consentedVisitor('marketing');
+      setNote(visitor ? 'Ziyaretçiye özel (pazarlama izni var).' : 'Anonim: pazarlama izni yok, ziyaretçi gönderilmedi ve ölçülmüyor.');
       fetch(`${base}/recommendations/${encodeURIComponent(widgetId)}/products${lang ? `?lang=${lang}` : ''}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...(currentProductId ? { currentProductId } : {}),
-          ...(ctx.marketing ? { visitorId: ctx.visitorId, sessionId: ctx.sessionId, userId: ctx.userId } : {}),
-        }),
+        body: JSON.stringify(visitor ? { visitorId: visitor.visitorId, sessionId: visitor.sessionId, userId: visitor.siteUserId } : {}),
         signal: controller.signal,
       })
         .then((r) => r.json())
@@ -91,27 +73,26 @@ export function PersonalStrip({ apiUrl, siteKey, widgetId, title, currentProduct
       stop();
       controller.abort();
     };
-  }, [base, widgetId, currentProductId, lang]);
+  }, [base, widgetId, lang]);
 
   const track = (eventType: 'impression' | 'click', productItemCode?: string, position?: number) => {
-    const ctx = visitorContext();
-    if (!ctx.marketing) return;
-    void fetch(`${base}/recommendations/track/event`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      keepalive: true, // the click navigates away
-      body: JSON.stringify({
+    const visitor = consentedVisitor('marketing');
+    if (!visitor) return;
+    void postJson(
+      `${base}/recommendations/track/event`,
+      {
         widgetId,
         eventType,
         productItemCode,
-        visitorId: ctx.visitorId,
-        sessionId: ctx.sessionId,
-        journeyId: ctx.journeyId,
-        userId: ctx.userId,
+        visitorId: visitor.visitorId,
+        sessionId: visitor.sessionId,
+        journeyId: visitor.journeyId,
+        userId: visitor.siteUserId,
         pageUrl: window.location.href,
         metadata: position != null ? { position, source: 'headless' } : { source: 'headless' },
-      }),
-    }).catch(() => undefined);
+      },
+      eventType === 'click', // the click navigates away
+    );
   };
 
   useEffect(() => {

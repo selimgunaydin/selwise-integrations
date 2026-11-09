@@ -45,10 +45,17 @@ export function initSelwise(): Promise<void> {
   return started;
 }
 
+const formatters = new Map<string, Intl.NumberFormat>();
+
 export function formatPrice(amount: number, currency = CURRENCY) {
-  try {
-    return new Intl.NumberFormat(LOCALE, { style: 'currency', currency }).format(amount);
-  } catch {
-    return `${amount.toFixed(2)} ${currency}`;
+  let f = formatters.get(currency);
+  if (!f) {
+    try {
+      f = new Intl.NumberFormat(LOCALE, { style: 'currency', currency });
+    } catch {
+      return `${amount.toFixed(2)} ${currency}`;
+    }
+    formatters.set(currency, f);
   }
+  return f.format(amount);
 }

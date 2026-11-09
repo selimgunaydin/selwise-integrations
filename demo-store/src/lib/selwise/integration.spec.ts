@@ -5,8 +5,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import { signSelwiseIdentity } from './identity';
-import { customerIdOf, importStatus, normalizePhone, toImportOrder, toImportUser } from './history-export';
+import { selwiseUserId, signSelwiseIdentity } from './identity';
+import { importStatus, normalizePhone, toImportOrder, toImportUser } from './history-export';
 import { PRODUCTS } from '../catalog';
 import { englishProduct, missingEnglishNames } from '../catalog/en';
 
@@ -43,7 +43,7 @@ test('an imported customer carries the id the storefront identifies with', () =>
     loyalty_points: 820,
     created_at: '2025-03-01T10:00:00.000Z',
   });
-  assert.equal(user.customerId, customerIdOf(42));
+  assert.equal(user.customerId, selwiseUserId({ id: 42 }));
   assert.equal(user.customerId, 'ardisa-42');
   assert.equal(user.phone, '+905321112233');
   assert.equal(user.traits.loyalty_tier, 'silver');

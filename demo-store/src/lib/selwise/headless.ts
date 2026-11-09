@@ -81,10 +81,13 @@ export interface SearchResult {
 
 const TIMEOUT_MS = 2500;
 
-async function getJson<T>(path: string, apiKey: string | undefined, keyName: string, params: Record<string, string | undefined>): Promise<Headless<T>> {
+type KeyVariable = 'SELWISE_SSR_API_KEY' | 'SELWISE_SERVER_API_KEY';
+
+async function getJson<T>(path: string, keyVariable: KeyVariable, params: Record<string, string | undefined>): Promise<Headless<T>> {
   const cfg = selwiseConfig();
+  const apiKey = process.env[keyVariable];
   if (!cfg.siteKey) return { ok: false, reason: 'SELWISE_SITE_KEY tanımlı değil.' };
-  if (!apiKey) return { ok: false, reason: `${keyName} tanımlı değil.` };
+  if (!apiKey) return { ok: false, reason: `${keyVariable} tanımlı değil.` };
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
   const url = `${cfg.apiUrl}/public/sites/${encodeURIComponent(cfg.siteKey)}${path}${qs.size ? `?${qs}` : ''}`;
@@ -103,7 +106,7 @@ async function getJson<T>(path: string, apiKey: string | undefined, keyName: str
 
 /** One strip, anonymous, for the server-rendered HTML. `code` is the product a product-context strategy anchors on. */
 export function ssrRecommendation(widgetId: string, opts: { code?: string; lang?: StoreLocale } = {}) {
-  return getJson<SsrRecommendation>(`/ssr/recommendations/${encodeURIComponent(widgetId)}`, process.env.SELWISE_SSR_API_KEY, 'SELWISE_SSR_API_KEY', {
+  return getJson<SsrRecommendation>(`/ssr/recommendations/${encodeURIComponent(widgetId)}`, 'SELWISE_SSR_API_KEY', {
     code: opts.code,
     lang: opts.lang,
   });
@@ -113,7 +116,6 @@ export function ssrRecommendation(widgetId: string, opts: { code?: string; lang?
 export async function recommendationStrips(pageUrl: string, lang?: StoreLocale): Promise<Headless<RecommendationStrip[]>> {
   const res = await getJson<RecommendationStrip[] | { widgets?: RecommendationStrip[]; recommendations?: RecommendationStrip[] }>(
     '/recommendations',
-    process.env.SELWISE_SERVER_API_KEY,
     'SELWISE_SERVER_API_KEY',
     { pageUrl, lang },
   );
@@ -125,7 +127,7 @@ export async function recommendationStrips(pageUrl: string, lang?: StoreLocale):
 
 /** Product search, server-side. Check `redirect` first: a redirect rule answers with no hits. */
 export function searchProducts(q: string, opts: { limit?: number; lang?: StoreLocale } = {}) {
-  return getJson<SearchResult>('/search', process.env.SELWISE_SERVER_API_KEY, 'SELWISE_SERVER_API_KEY', {
+  return getJson<SearchResult>('/search', 'SELWISE_SERVER_API_KEY', {
     q,
     limit: String(opts.limit ?? 12),
     lang: opts.lang,

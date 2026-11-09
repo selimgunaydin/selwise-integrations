@@ -9,6 +9,11 @@ import { storeLocale } from '@/lib/selwise/locale';
 
 export const metadata = { title: 'Dil' };
 
+// Static catalogue data: computed once, not per request.
+const SAMPLE = PRODUCTS[0];
+const SAMPLE_EN = englishProduct(SAMPLE);
+const MISSING = missingEnglishNames(PRODUCTS);
+
 const SNIPPET = `<!-- Widget dili <html lang>'den okur; tarayıcının dilini değil -->
 <html lang="en">
 
@@ -22,9 +27,6 @@ GET /public/sites/SITE_KEY/ssr/recommendations/WIDGET_ID?lang=en`;
 export default async function LanguagePage() {
   const cfg = selwiseConfig();
   const lang = storeLocale();
-  const sample = PRODUCTS[0];
-  const sampleEn = englishProduct(sample);
-  const missing = missingEnglishNames(PRODUCTS);
   const search = await searchProducts(lang === 'en' ? 'linen' : 'keten', { limit: 6, lang });
 
   return (
@@ -66,8 +68,8 @@ export default async function LanguagePage() {
           <dl>
             <Field label="Ana feed" value={`${cfg.publicUrl}/feeds/google.xml`} />
             <Field label="İngilizce dil feed’i" value={`${cfg.publicUrl}/feeds/google.en.xml`} />
-            <Field label="Örnek" value={`${sample.title} → ${sampleEn.title}`} />
-            <Field label="Çevrilmemiş ad" value={missing.length ? missing.join(', ') : 'yok'} />
+            <Field label="Örnek" value={`${SAMPLE.title} → ${SAMPLE_EN.title}`} />
+            <Field label="Çevrilmemiş ad" value={MISSING.length ? MISSING.join(', ') : 'yok'} />
           </dl>
           <DocLink path="product-feeds/language-feeds">Dil feed’leri</DocLink>
         </Panel>

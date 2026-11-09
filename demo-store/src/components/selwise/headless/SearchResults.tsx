@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { selwiseInstance, withSelwise } from '@/lib/selwise/client';
+import { consentedVisitor, postJson, publicSiteUrl, withSelwise } from '@/lib/selwise/client';
 import { HeadlessCard, type HeadlessProduct } from './HeadlessCard';
 
 /**
@@ -21,18 +21,14 @@ interface Props {
 }
 
 function analyticsContext() {
-  const s = selwiseInstance();
-  if (!s?.getConsentState?.()?.analytics) return null;
-  return {
-    visitorId: s.getVisitorId?.(),
-    sessionId: s.getSessionId?.(),
-    siteUserId: s.getSiteUserId?.() || undefined,
-    pageUrl: window.location.href,
-  };
+  const visitor = consentedVisitor('analytics');
+  if (!visitor) return null;
+  const { visitorId, sessionId, siteUserId } = visitor;
+  return { visitorId, sessionId, siteUserId, pageUrl: window.location.href };
 }
 
 export function SearchResults({ apiUrl, siteKey, query, hits, total }: Props) {
-  const base = `${apiUrl}/public/sites/${encodeURIComponent(siteKey)}/search`;
+  const base = `${publicSiteUrl(apiUrl, siteKey)}/search`;
   const logged = useRef('');
 
   useEffect(() => {
@@ -42,22 +38,14 @@ export function SearchResults({ apiUrl, siteKey, query, hits, total }: Props) {
       if (!ctx || logged.current === query) return;
       logged.current = query;
       const eventId = `headless-search:${ctx.sessionId}:${query}`;
-      const post = (path: string, body: Record<string, unknown>) =>
-        fetch(`${base}/${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).catch(() => undefined);
-      void post('log', { ...ctx, eventId, query, resultsCount: total });
-      if (total === 0) void post('zero-results', { ...ctx, eventId: `${eventId}:zero`, query });
+      void postJson(`${base}/log`, { ...ctx, eventId, query, resultsCount: total });
+      if (total === 0) void postJson(`${base}/zero-results`, { ...ctx, eventId: `${eventId}:zero`, query });
     });
   }, [base, query, total]);
 
   const click = (itemCode: string) => {
     const ctx = analyticsContext();
-    if (!ctx) return;
-    void fetch(`${base}/click`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      keepalive: true,
-      body: JSON.stringify({ ...ctx, query, productItemCode: itemCode }),
-    }).catch(() => undefined);
+    if (ctx) void postJson(`${base}/click`, { ...ctx, query, productItemCode: itemCode }, true);
   };
 
   if (hits.length === 0) return <p className="text-sm text-ink-muted">“{query}” için sonuç yok. Analiz izni varsa sorgu sıfır sonuç defterine yazılır.</p>;

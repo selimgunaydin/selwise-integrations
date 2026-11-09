@@ -1,7 +1,9 @@
 import crypto from 'crypto';
 import { cookies } from 'next/headers';
 import { db, nowIso } from './db';
-import { signSelwiseIdentity } from '../selwise/identity';
+import { selwiseUserId, signSelwiseIdentity } from '../selwise/identity';
+
+export { selwiseUserId };
 
 export const SESSION_COOKIE = 'ardisa_session';
 const SESSION_DAYS = 30;
@@ -34,7 +36,6 @@ export function verifyPassword(password: string, stored: string) {
 }
 
 /** The id Selwise sees: stable, short, never the e-mail (SITE_USER_ID_MAX_LENGTH is 64). */
-export const selwiseUserId = (u: Pick<User, 'id'>) => `ardisa-${u.id}`;
 
 export function createSession(userId: number) {
   const token = crypto.randomBytes(24).toString('hex');
@@ -130,13 +131,11 @@ export function consumePasswordReset(token: string, newPassword: string) {
 export function publicUser(u: User | null) {
   if (!u) return null;
   const selwiseId = selwiseUserId(u);
-  // The signature only — the identity secret stays on the server (lib/selwise/identity).
-  const signature = signSelwiseIdentity(selwiseId);
   return {
     id: u.id,
     selwiseId,
-    selwiseIdHash: signature?.userHash ?? null,
-    selwiseIdHashTs: signature?.userHashTs ?? null,
+    // The signature only — the identity secret stays on the server (lib/selwise/identity).
+    selwiseSignature: signSelwiseIdentity(selwiseId),
     email: u.email,
     firstName: u.first_name,
     lastName: u.last_name,

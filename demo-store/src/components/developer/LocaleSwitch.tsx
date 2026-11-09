@@ -1,33 +1,30 @@
 'use client';
 
 import { useState } from 'react';
-import { selwiseInstance } from '@/lib/selwise/client';
+import { STORE_LOCALES, type StoreLocale } from '@/lib/selwise/locales';
 
 /**
- * Switch the language Selwise speaks on this store.
+ * Switch the language Selwise speaks on this store: a cookie that makes the
+ * server write `<html lang>`, then a full load — `<html lang>` and the
+ * widget's bootstrap are read once per document, so the widget asks for the
+ * channel's texts in the new language from the first request.
  *
- * Two things, in this order: the cookie that makes the server write
- * `<html lang>` (every later page load asks Selwise in that language), and
- * `Selwise.setLocale` for THIS page — the widget's own words (consent
- * buttons, "no results") change at once; the merchant's texts follow on the
- * next page load. setLocale is not queued: it is called only on the real instance.
+ * (`Selwise.setLocale` is the in-page alternative for a page whose
+ * `<html lang>` cannot say the language; a reload makes it unnecessary here.)
  */
-export function LocaleSwitch({ current }: { current: 'tr' | 'en' }) {
+export function LocaleSwitch({ current }: { current: StoreLocale }) {
   const [busy, setBusy] = useState(false);
 
-  const choose = async (locale: 'tr' | 'en') => {
+  const choose = async (locale: StoreLocale) => {
     if (locale === current || busy) return;
     setBusy(true);
     await fetch('/api/locale', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ locale }) });
-    selwiseInstance()?.setLocale?.(locale);
-    // A full load, not router.refresh(): <html lang> and the widget's bootstrap
-    // are read once per document.
     window.location.reload();
   };
 
   return (
     <div className="inline-flex rounded-full border border-line p-1" role="group" aria-label="Selwise dili">
-      {(['tr', 'en'] as const).map((l) => (
+      {STORE_LOCALES.map((l) => (
         <button
           key={l}
           type="button"

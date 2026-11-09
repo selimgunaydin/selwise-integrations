@@ -16,6 +16,7 @@
  *    is counted as revenue.
  */
 import { SELWISE_ORDER_STATUS } from './server';
+import { selwiseUserId } from './identity';
 
 export interface StoreUserRow {
   id: number;
@@ -56,8 +57,6 @@ interface StoredLine {
   lineTotal?: number;
 }
 
-export const customerIdOf = (userId: number) => `ardisa-${userId}`;
-
 /** E.164 for a Turkish mobile typed the local way; anything else is left out rather than guessed. */
 export function normalizePhone(phone: string | null): string | undefined {
   if (!phone) return undefined;
@@ -76,7 +75,7 @@ export function toImportUser(u: StoreUserRow) {
   // is the earliest it can have happened, and the form is the evidence.
   const evidence = 'Ardisa üyelik formu, iletişim izni kutusu';
   return {
-    customerId: customerIdOf(u.id),
+    customerId: selwiseUserId(u),
     email: u.email,
     ...(phone ? { phone } : {}),
     firstName: u.first_name,
@@ -113,7 +112,7 @@ export function toImportOrder(o: StoreOrderRow) {
   }
   return {
     orderId: o.number,
-    ...(o.user_id ? { customerId: customerIdOf(o.user_id) } : { email: o.email }),
+    ...(o.user_id ? { customerId: selwiseUserId({ id: o.user_id }) } : { email: o.email }),
     placedAt: o.created_at,
     currency: 'TRY',
     status: importStatus(o.status),
@@ -137,4 +136,3 @@ export function toImportOrder(o: StoreOrderRow) {
   };
 }
 
-export const ndjson = (rows: unknown[]) => rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');

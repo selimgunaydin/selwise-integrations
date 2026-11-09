@@ -102,7 +102,7 @@ export const BEHAVIOR_SIGNALS = [
   'cartValue',
   'referrerType',
   /**
-   * The product on screen (October 2026, Selwise's planning notes §17) —
+   * The product on screen (October 2026) —
    * the same facts `{product.*}` says, so a sentence can be chosen by the
    * product it is about: "Son {product.stock} ürün" only while the stock is
    * low, a discount line only above a rate worth saying.
@@ -238,8 +238,7 @@ export type PageType = (typeof PAGE_TYPES)[number];
  * write: anything that matches their products matches their category pages and
  * their home page too. Akinon is the shape that forced it, where product and
  * category pretty URLs are configured per store in Omnitron and rewritten
- * server-side, so no regex covers them (see the page-type note in
- * Selwise's planning notes).
+ * server-side, so no regex covers them.
  *
  * The platform already knew the answer — the tracking module has labelled every
  * `page_view` with a page type since it shipped, resolving it from the URL and

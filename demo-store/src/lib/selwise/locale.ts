@@ -1,4 +1,5 @@
 import { cookies } from 'next/headers';
+import { isStoreLocale, LOCALE_COOKIE, type StoreLocale } from './locales';
 
 /**
  * The page's language, as Selwise reads it.
@@ -13,13 +14,11 @@ import { cookies } from 'next/headers';
  * Ardisa's own pages stay Turkish; the switch (/gelistirici/dil) changes only
  * what Selwise draws, which is exactly the part a merchant has to wire.
  */
-export const STORE_LOCALES = ['tr', 'en'] as const;
-export type StoreLocale = (typeof STORE_LOCALES)[number];
-export const LOCALE_COOKIE = 'ardisa_lang';
+export { isStoreLocale, LOCALE_COOKIE, STORE_LOCALES, type StoreLocale } from './locales';
 
 export function storeLocale(): StoreLocale {
   const value = cookies().get(LOCALE_COOKIE)?.value;
-  return (STORE_LOCALES as readonly string[]).includes(value || '') ? (value as StoreLocale) : 'tr';
+  return isStoreLocale(value) ? value : 'tr';
 }
 
 /** Who draws the cookie banner — see components/selwise/StoreConsentBanner. */

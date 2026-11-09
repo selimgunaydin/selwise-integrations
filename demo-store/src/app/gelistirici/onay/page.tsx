@@ -1,5 +1,6 @@
 import { Code, DocLink, Panel, SourceLink } from '@/components/developer/DevBits';
 import { ConsentLab } from '@/components/developer/ConsentLab';
+import { consentUiMode } from '@/lib/selwise/locale';
 
 export const metadata = { title: 'Çerez onayı' };
 
@@ -14,7 +15,7 @@ export default function ConsentPage() {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Panel title="Onay API’si, canlı">
-        <ConsentLab />
+        <ConsentLab mode={consentUiMode()} />
       </Panel>
       <div className="space-y-6">
         <Panel title="Kendi bandınızla">

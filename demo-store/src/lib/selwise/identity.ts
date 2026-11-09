@@ -30,3 +30,10 @@ export function signSelwiseIdentity(customerId: string, now = Date.now()): Ident
   const userHash = crypto.createHmac('sha256', secret).update(`${customerId}:${userHashTs}`).digest('hex');
   return { userHash, userHashTs };
 }
+
+/**
+ * The customer id Selwise knows a shopper by — what `identify`, an order's
+ * `siteUserId` and the history import's `customerId` all carry. One
+ * definition, so the imported history and the live visitor are one person.
+ */
+export const selwiseUserId = (u: { id: number }) => `ardisa-${u.id}`;

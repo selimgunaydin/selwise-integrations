@@ -15,8 +15,7 @@
  *
  * The first one is the goal bar (`goal_bar`): "₺120 more for free shipping",
  * with a bar that fills as the cart grows and a different sentence once the
- * goal is reached. Insider calls it the Purchase Progress Bar. The design
- * record is Selwise's planning notes; this file is §5 of it in code.
+ * goal is reached. Insider calls it the Purchase Progress Bar.
  *
  * ## Three layers, one direction
  *
@@ -231,7 +230,7 @@ export function normalizeGoalThresholds(
 
 /**
  * A goal step can name a CHANNEL value instead of an amount: "the channel's
- * free-shipping threshold" (plan phase 5, Selwise's planning notes §8).
+ * free-shipping threshold".
  * The merchant enters it once, on the channel, and every bar that points at
  * it moves with it — a free-shipping rule that changes in the store's own
  * admin is then one edit here, not one per campaign.
@@ -815,8 +814,7 @@ export function goalBarPreviewValue(spec: Pick<GoalBarSpec, 'metric' | 'threshol
 /**
  * A campaign's content can carry STATES: "when the cart is worth 750 or more,
  * say this instead", "when the shopper is signed in, say that", "when it is
- * after 18:00, do not show at all". Plan phase 3 (Selwise's planning notes
- * §13).
+ * after 18:00, do not show at all".
  *
  * The condition is a behaviour rule set — the SAME shape and the SAME
  * evaluator as a campaign's own targeting (`./page-targeting`), so the panel
@@ -1457,7 +1455,7 @@ const PRODUCT_SIGNAL_SET: ReadonlySet<string> = new Set(PRODUCT_BEHAVIOR_SIGNALS
  * price the store tells search engines the product sells for now.
  *
  * Only the structured data, and deliberately not the data layer's
- * `product_view` / `view_item` price (Selwise's planning notes §17):
+ * `product_view` / `view_item` price:
  * that event reaches the widget behind the consent gate, at a time nothing
  * controls, with a code read by a different resolver, and our data layer
  * contract does not say whether its `price` is before or after a discount.

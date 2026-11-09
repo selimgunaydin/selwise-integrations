@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { LOCALE_COOKIE, STORE_LOCALES } from '@/lib/selwise/locale';
+import { isStoreLocale, LOCALE_COOKIE, STORE_LOCALES } from '@/lib/selwise/locale';
 
 /** Sets the language <html lang> carries — what the Selwise widget reads. */
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as { locale?: string };
-  const locale = body.locale || '';
-  if (!(STORE_LOCALES as readonly string[]).includes(locale)) {
+  const locale = body.locale;
+  if (!isStoreLocale(locale)) {
     return NextResponse.json({ error: `locale: ${STORE_LOCALES.join(' | ')}` }, { status: 400 });
   }
   const res = NextResponse.json({ locale });

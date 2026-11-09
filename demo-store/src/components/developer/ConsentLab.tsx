@@ -1,23 +1,23 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { consentUi, grantConsent, openConsentPreferences, revokeConsent, selwiseInstance, withdrawConsent, withSelwise, type ConsentState } from '@/lib/selwise/client';
+import { grantConsent, openConsentPreferences, revokeConsent, selwiseInstance, withdrawConsent, withSelwise, type ConsentState } from '@/lib/selwise/client';
 
 /**
  * The consent API, button by button. Each button is one documented call; the
  * state below is what `getConsentState()` answers right after it.
  */
-export function ConsentLab() {
+export function ConsentLab({ mode }: { mode: 'selwise' | 'store' }) {
+  // undefined: Selwise did not load; null: the visitor has not answered.
   const [state, setState] = useState<ConsentState | null | undefined>(undefined);
   const [last, setLast] = useState<string>('');
-  const [mode, setMode] = useState<'selwise' | 'store'>('selwise');
 
-  const read = useCallback(() => setState(selwiseInstance()?.getConsentState?.() ?? (selwiseInstance() ? null : undefined)), []);
+  const read = useCallback(() => {
+    const s = selwiseInstance();
+    setState(s ? (s.getConsentState?.() ?? null) : undefined);
+  }, []);
 
-  useEffect(() => {
-    setMode(consentUi());
-    return withSelwise(() => read());
-  }, [read]);
+  useEffect(() => withSelwise(read), [read]);
 
   const run = (label: string, fn: () => void) => {
     fn();

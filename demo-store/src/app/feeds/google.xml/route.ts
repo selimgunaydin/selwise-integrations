@@ -22,10 +22,10 @@
 import { liveProducts } from '@/lib/store/products';
 import { selwiseConfig } from '@/lib/selwise/config';
 import { sizeCartCode } from '@/lib/catalog';
+import { escapeXml as esc } from '@/lib/xml';
 
 export const dynamic = 'force-dynamic';
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const money = (n: number) => `${n.toFixed(2)} TRY`;
 
 export function GET() {

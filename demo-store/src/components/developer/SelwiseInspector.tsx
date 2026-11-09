@@ -48,14 +48,11 @@ export function SelwiseInspector() {
   const refresh = useCallback(() => setSnap(read()), []);
 
   useEffect(() => {
-    const stop = withSelwise(() => refresh());
-    const t = window.setTimeout(() => setMissing(!selwiseInstance()), 10500);
-    const onCart = () => refresh();
-    document.addEventListener('selwise:cart', onCart);
+    const stop = withSelwise(refresh, () => setMissing(true));
+    document.addEventListener('selwise:cart', refresh);
     return () => {
       stop();
-      window.clearTimeout(t);
-      document.removeEventListener('selwise:cart', onCart);
+      document.removeEventListener('selwise:cart', refresh);
     };
   }, [refresh]);
 

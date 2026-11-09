@@ -37,8 +37,6 @@ export interface SelwiseGlobal {
   getCart?: () => { known: boolean; total: number; itemCount: number; currency: string | null };
   getDataLayer?: () => Record<string, unknown>[];
   getActiveExperiments?: () => Array<Record<string, unknown>>;
-  getExperimentVariant?: (experimentId: string) => string | null;
-  getVariant?: (experimentId: string) => Record<string, unknown> | undefined;
   setLocale?: (locale: string) => void;
 }
 
@@ -179,9 +177,8 @@ export function customEvent(name: string, metadata: Record<string, unknown>) {
 
 export interface ShopperTraits {
   selwiseId: string;
-  /** The server's HMAC of `selwiseId:selwiseIdHashTs` (lib/selwise/identity) — null when the channel has no identity secret here. */
-  selwiseIdHash?: string | null;
-  selwiseIdHashTs?: number | null;
+  /** The server's signature of `selwiseId` (lib/selwise/identity) — null when the channel has no identity secret here. */
+  selwiseSignature?: { userHash: string; userHashTs: number } | null;
   email: string;
   firstName: string;
   lastName: string;
@@ -213,11 +210,8 @@ function traitsOf(u: ShopperTraits) {
  * it out and sends it with the identify call only.
  */
 function layerSignature(u: ShopperTraits) {
-  return u.selwiseIdHash && u.selwiseIdHashTs ? { idHash: u.selwiseIdHash, idHashTs: u.selwiseIdHashTs } : {};
-}
-
-function identifySignature(u: ShopperTraits) {
-  return u.selwiseIdHash && u.selwiseIdHashTs ? { userHash: u.selwiseIdHash, userHashTs: u.selwiseIdHashTs } : {};
+  const sig = u.selwiseSignature;
+  return sig ? { idHash: sig.userHash, idHashTs: sig.userHashTs } : {};
 }
 
 export function userEvent(kind: 'user_signup' | 'user_login', u: ShopperTraits, method = 'email') {
@@ -244,7 +238,7 @@ export function userEvent(kind: 'user_signup' | 'user_login', u: ShopperTraits, 
 /** Called on every page while signed in. The widget skips a repeat for free. */
 export function identify(u: ShopperTraits) {
   try {
-    void sw()?.identify?.(u.selwiseId, { email: u.email, ...traitsOf(u), ...identifySignature(u) });
+    void sw()?.identify?.(u.selwiseId, { email: u.email, ...traitsOf(u), ...u.selwiseSignature });
   } catch {
     /* ignore */
   }
@@ -399,34 +393,70 @@ export function openConsentPreferences() {
   sw()?.showConsentPreferences?.();
 }
 
+export function selwiseInstance(): SelwiseGlobal | null {
+  const s = sw();
+  return s && typeof s.getVisitorId === 'function' ? s : null;
+}
+
+let ready: Promise<SelwiseGlobal | null> | null = null;
+
 /**
- * The value-returning methods (getVisitorId, getConsentState, getExperimentVariant…)
+ * The value-returning methods (getVisitorId, getConsentState, getActiveExperiments…)
  * exist only once client.js has replaced the install snippet's queue stub, so
  * wait for the real instance — the pattern docs/integration/javascript-api
- * calls "Hazır olma". Gives up after 10 seconds (ad blocker, no site key).
+ * calls "Hazır olma". ONE poller for the whole page, however many components
+ * wait; it answers null after 10 seconds (ad blocker, no site key).
  */
-export function withSelwise(callback: (s: SelwiseGlobal) => void): () => void {
-  const ready = () => {
-    const s = sw();
-    return s && typeof s.getVisitorId === 'function' ? s : null;
+export function selwiseReady(): Promise<SelwiseGlobal | null> {
+  if (ready) return ready;
+  ready = new Promise((resolve) => {
+    let tries = 0;
+    const tick = () => {
+      const s = selwiseInstance();
+      if (s || tries++ >= 100) resolve(s);
+      else window.setTimeout(tick, 100);
+    };
+    tick();
+  });
+  return ready;
+}
+
+/** `selwiseReady` for an effect: the returned function cancels the callback on unmount. */
+export function withSelwise(callback: (s: SelwiseGlobal) => void, onMissing?: () => void): () => void {
+  let live = true;
+  void selwiseReady().then((s) => {
+    if (!live) return;
+    if (s) callback(s);
+    else onMissing?.();
+  });
+  return () => {
+    live = false;
   };
-  const now = ready();
-  if (now) {
-    callback(now);
-    return () => undefined;
-  }
-  let tries = 0;
-  const timer = window.setInterval(() => {
-    tries += 1;
-    const s = ready();
-    if (s) {
-      window.clearInterval(timer);
-      callback(s);
-    } else if (tries > 100) {
-      window.clearInterval(timer);
-    }
-  }, 100);
-  return () => window.clearInterval(timer);
+}
+
+/**
+ * The visitor's ids — only when `category` is consented. A personal
+ * recommendation reads the visitor's history (`marketing`); a search log is
+ * what the visitor did (`analytics`). Without consent nothing that identifies
+ * the visitor leaves the page.
+ */
+export function consentedVisitor(category: keyof ConsentState) {
+  const s = selwiseInstance();
+  if (!s?.getConsentState?.()?.[category]) return null;
+  return {
+    visitorId: s.getVisitorId?.(),
+    sessionId: s.getSessionId?.(),
+    siteUserId: s.getSiteUserId?.() || undefined,
+    journeyId: s.getJourneyState?.().journeyId || undefined,
+  };
+}
+
+/** The public API base of this channel, as the browser calls it (Origin-authenticated, no key). */
+export const publicSiteUrl = (apiUrl: string, siteKey: string) => `${apiUrl}/public/sites/${encodeURIComponent(siteKey)}`;
+
+/** A fire-and-forget JSON POST; `keepalive` survives the navigation a click starts. */
+export function postJson(url: string, body: unknown, keepalive = false) {
+  return fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), keepalive }).catch(() => undefined);
 }
 
 /** Queued methods: safe before client.js arrives, replayed in order once it does. */
@@ -440,9 +470,4 @@ export function revokeConsent(categories?: Array<keyof ConsentState>) {
 
 export function withdrawConsent() {
   sw()?.withdrawConsent?.();
-}
-
-export function selwiseInstance(): SelwiseGlobal | null {
-  const s = sw();
-  return s && typeof s.getVisitorId === 'function' ? s : null;
 }

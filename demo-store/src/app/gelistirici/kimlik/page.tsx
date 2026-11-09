@@ -21,6 +21,7 @@ Selwise.identify(customerId, { email, userHash, userHashTs });`;
 export default function IdentityPage() {
   const user = publicUser(currentUser());
   const configured = Boolean(process.env.SELWISE_IDENTITY_SECRET);
+  const sig = user?.selwiseSignature ?? null;
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -33,9 +34,9 @@ export default function IdentityPage() {
         ) : (
           <dl>
             <Field label="Müşteri numarası" value={user.selwiseId} />
-            <Field label="İmza (userHash)" value={user.selwiseIdHash ?? (configured ? '—' : 'imzasız: SELWISE_IDENTITY_SECRET tanımlı değil')} />
-            <Field label="Zaman (userHashTs)" value={user.selwiseIdHashTs ? `${user.selwiseIdHashTs} · ${new Date(user.selwiseIdHashTs * 1000).toISOString()}` : '—'} />
-            <Field label="İmzalanan metin" value={user.selwiseIdHashTs ? `${user.selwiseId}:${user.selwiseIdHashTs}` : '—'} />
+            <Field label="İmza (userHash)" value={sig?.userHash ?? (configured ? '—' : 'imzasız: SELWISE_IDENTITY_SECRET tanımlı değil')} />
+            <Field label="Zaman (userHashTs)" value={sig ? `${sig.userHashTs} · ${new Date(sig.userHashTs * 1000).toISOString()}` : '—'} />
+            <Field label="İmzalanan metin" value={sig ? `${user.selwiseId}:${sig.userHashTs}` : '—'} />
           </dl>
         )}
         <p>
@@ -60,7 +61,7 @@ export default function IdentityPage() {
         <DocLink path="integration/identity-verification">İmzalı kimlik dokümanı</DocLink>
         <p className="text-xs text-ink-muted">
           Mobil uygulama da aynı imzayı kullanır: uygulama bu mağazanın <code>/api/auth/login</code> ucuna giriş yapar, yanıttaki{' '}
-          <code>selwiseIdHash</code>’i <code>selwise.identify(id, traits, {'{ userHash, userHashTs }'})</code> ile verir (examples/expo-app).
+          <code>selwiseSignature</code>’ı <code>selwise.identify(id, traits, selwiseSignature)</code> ile verir (depodaki <code>expo-app/</code>).
         </p>
       </Panel>
     </div>

@@ -33,7 +33,7 @@
  * Deterministic from two ids nobody has to store, which is the whole design:
  *
  *  - the WIDGET decides from its own `selwise_vid` before any chunk loads
- *    (the widget's performance rules), with nothing but `percent` and the
+ *    ("decide before importing"), with nothing but `percent` and the
  *    channel id from `/config`;
  *  - the React Native SDK decides the same way from its stored visitor id
  *    (this file is vendored into it, see `sync-vendored-page-targeting.js`);

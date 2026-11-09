@@ -11,6 +11,7 @@ npx tsx scripts/export-selwise-history.ts ./export
 # → export/users.ndjson   bir satır = bir kişi
 # → export/orders.ndjson  bir satır = bir sipariş`;
 
+/** The first records of a sample file, pretty-printed — read once, when the module loads. */
 function sample(file: string, lines = 2) {
   try {
     const text = fs.readFileSync(path.join(process.cwd(), 'examples', 'data-import', file), 'utf8');
@@ -24,6 +25,9 @@ function sample(file: string, lines = 2) {
     return '(örnek dosya bu kurulumda yok)';
   }
 }
+
+const USERS_SAMPLE = sample('users.sample.ndjson');
+const ORDERS_SAMPLE = sample('orders.sample.ndjson');
 
 export default function HistoryPage() {
   return (
@@ -56,10 +60,10 @@ export default function HistoryPage() {
       </Panel>
       <div className="space-y-6">
         <Panel title="users.sample.ndjson" aside={<SourceLink path="examples/data-import/users.sample.ndjson" />}>
-          <Code>{sample('users.sample.ndjson')}</Code>
+          <Code>{USERS_SAMPLE}</Code>
         </Panel>
         <Panel title="orders.sample.ndjson" aside={<SourceLink path="examples/data-import/orders.sample.ndjson" />}>
-          <Code>{sample('orders.sample.ndjson')}</Code>
+          <Code>{ORDERS_SAMPLE}</Code>
         </Panel>
       </div>
     </div>
