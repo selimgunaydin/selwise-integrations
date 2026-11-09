@@ -37,6 +37,7 @@ import {
 import { normalizeRemoteConfig, type RemoteConfig } from './core/remote-config.js';
 import { AppPresence, isActiveAppState } from './core/presence.js';
 import { isInControlGroup } from './vendor/control-group.js';
+import { resolveForDevice } from './vendor/devices.js';
 import type { BehaviorSnapshot } from './vendor/page-targeting.js';
 import {
   ScenarioSeenStore,
@@ -2225,7 +2226,13 @@ export interface SearchBehavior {
  * without the contract packages.
  */
 export function readSearchBehavior(body: unknown): SearchBehavior | null {
-  const settings = (body as { settings?: { behavior?: Record<string, unknown> } } | null)?.settings;
+  const raw = (body as { settings?: Record<string, unknown> } | null)?.settings;
+  // An app is always a phone: the settings as a phone reads them.
+  const settings = raw
+    ? (resolveForDevice(raw, raw.devices as { mobile?: Record<string, unknown> } | undefined, 'mobile') as {
+        behavior?: Record<string, unknown>;
+      })
+    : undefined;
   const behavior = settings?.behavior;
   if (!behavior || typeof behavior !== 'object') return null;
   const int = (value: unknown, min: number, max: number): number | null =>

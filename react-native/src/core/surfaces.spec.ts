@@ -42,6 +42,20 @@ const EXIT_POPUP = {
 };
 
 describe('normalizeSurface', () => {
+  it('reads a campaign as a phone draws it: its phone settings over the base', () => {
+    const surface = normalizeSurface(
+      {
+        ...ANNOUNCEMENT,
+        devices: { mobile: { content: { text: 'Kısa' }, styles: { fontSize: '12px' } } },
+      },
+      'campaign',
+    ) as Surface;
+    expect(surface.content.text).toBe('Kısa');
+    expect(surface.content.buttonText).toBe('Keşfet');
+    expect(surface.styles.fontSize).toBe('12px');
+    expect(surface.styles.backgroundColor).toBe('#d3145a');
+  });
+
   it('keeps content, styles and placement as the host needs them', () => {
     const surface = normalizeSurface(ANNOUNCEMENT, 'campaign') as Surface;
     expect(surface.kind).toBe('campaign');

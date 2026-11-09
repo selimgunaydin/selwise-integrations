@@ -212,6 +212,8 @@ export class Endpoints {
         maxPrice: options.maxPrice,
         inStock: options.inStock,
         category: options.category,
+        // An app is always a phone: the search answers with its phone settings.
+        device: 'mobile',
       },
       signal,
     });
@@ -231,7 +233,7 @@ export class Endpoints {
   }
 
   getSearchSuggestions(signal?: AbortSignal): Promise<Record<string, unknown>> {
-    return this.http.request({ path: '/search/suggestions', signal });
+    return this.http.request({ path: '/search/suggestions', query: { device: 'mobile' }, signal });
   }
 
   /**

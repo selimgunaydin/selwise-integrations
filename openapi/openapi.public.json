@@ -279,6 +279,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "device",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -411,6 +419,14 @@
           },
           {
             "name": "lang",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "device",
             "required": false,
             "in": "query",
             "schema": {
@@ -4774,6 +4790,14 @@
           },
           "isTestMode": {
             "type": "boolean"
+          },
+          "deviceVisibility": {
+            "type": "string",
+            "enum": [
+              "desktop",
+              "mobile"
+            ],
+            "description": "Only when the rule is for one device: `mobile` (a viewport below 768px) or `desktop`. Absent means every device."
           }
         },
         "required": [
@@ -5432,6 +5456,18 @@
             "type": "object",
             "additionalProperties": true
           },
+          "devices": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What differs on a phone (viewport below 768px): `{ mobile: { content?, styles?, placement? } }`, laid over the three objects above.",
+            "example": {
+              "mobile": {
+                "content": {
+                  "text": "Kargo bedava"
+                }
+              }
+            }
+          },
           "customCss": {
             "type": "string"
           },
@@ -5476,6 +5512,7 @@
           "contentJson",
           "stylesJson",
           "placementConfigJson",
+          "devices",
           "customCss",
           "customJs",
           "variantId",
@@ -6120,6 +6157,17 @@
             "nullable": true,
             "description": "The product card design this strip draws with (Design → Product Cards)."
           },
+          "mobileProductCard": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true,
+            "description": "The card a phone (viewport below 768px) draws the strip with; null draws `productCard`."
+          },
+          "devices": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What differs on a phone (viewport below 768px): `{ mobile: { … } }`, a partial strip over its display fields (layout, product count, gap, autoplay, arrows, dots, titles and their styles, the container style), resolved over the rest."
+          },
           "priority": {
             "type": "number"
           },
@@ -6189,6 +6237,8 @@
           "cartPlatform",
           "addToCartConfig",
           "productCard",
+          "mobileProductCard",
+          "devices",
           "priority",
           "segmentTargetingMode",
           "segmentIds",
@@ -7287,12 +7337,18 @@
           "settings": {
             "type": "object",
             "additionalProperties": true,
-            "description": "The instant-search settings document (`SearchSettings`): placement (the field, what opens it, the desktop and phone surfaces), behavior (minChars, debounceMs, maxResults), results, suggestions, appearance, texts (in the visitor's language) and cart. Absent when the channel has no configuration."
+            "description": "The instant-search settings document (`SearchSettings`): placement (the field, what opens it, the desktop and phone surfaces), behavior (minChars, debounceMs, maxResults), results, suggestions, appearance, texts (in the visitor's language), cart, and `devices.mobile` — a partial document of what differs on a phone (viewport below 768px), resolved over the rest. Absent when the channel has no configuration."
           },
           "productCard": {
             "type": "object",
             "additionalProperties": true,
             "nullable": true
+          },
+          "mobileProductCard": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true,
+            "description": "The card a phone (viewport below 768px) draws results with; null draws `productCard`."
           },
           "audience": {
             "type": "object",

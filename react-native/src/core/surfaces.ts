@@ -8,6 +8,7 @@ import {
   type DynamicProduct,
 } from '../vendor/dynamic-content.js';
 import type { FrequencyCapConfig } from './eligibility.js';
+import { resolveCampaignForDevice } from '../vendor/campaign-devices.js';
 import type { SelwiseStorage } from '../types.js';
 import { STORAGE_KEYS } from './storage.js';
 
@@ -240,14 +241,27 @@ export function normalizeSurface(raw: unknown, kind: SurfaceKind): Surface | nul
   const type = asString(entry.type, '');
   if (!id || !type) return null;
 
+  // An app is always a phone: a campaign is read as a phone-width page draws
+  // it, with its phone settings (`devices.mobile`) laid over the base. The
+  // same resolver the web widget uses below 768px.
+  const onPhone = resolveCampaignForDevice(
+    {
+      content: asRecord(entry.contentJson),
+      styles: asRecord(entry.stylesJson),
+      placement: asRecord(entry.placementConfigJson),
+    },
+    entry.devices,
+    'mobile',
+  );
+
   return {
     id,
     kind,
     type,
     isTestMode: entry.isTestMode === true,
-    content: asRecord(entry.contentJson),
-    styles: asRecord(entry.stylesJson),
-    placement: normalizePlacement(entry.placementConfigJson, type),
+    content: onPhone.content,
+    styles: onPhone.styles,
+    placement: normalizePlacement(onPhone.placement, type),
     targeting: entry.pageTargetingJson,
     segmentTargetingMode: asString(entry.segmentTargetingMode, 'all'),
     segmentIds: Array.isArray(entry.segmentIds)
@@ -255,7 +269,7 @@ export function normalizeSurface(raw: unknown, kind: SurfaceKind): Surface | nul
       : [],
     customCss: asString(entry.customCss ?? entry.customCSS, ''),
     customJs: asString(entry.customJs ?? entry.customJS, ''),
-    rawPlacement: asRecord(entry.placementConfigJson),
+    rawPlacement: onPhone.placement,
     experiment: null,
     stateId: null,
   };
