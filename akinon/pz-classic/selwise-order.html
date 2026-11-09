@@ -1,0 +1,88 @@
+{#
+  Selwise — order tracking for the Project Zero (Django) success page
+  ==================================================================
+
+  Install
+  -------
+  Copy to `templates/orders/selwise-order.html` and include it at the bottom of
+  the checkout success template (usually `templates/orders/success.html` or the
+  project's `checkoutSuccess` page):
+
+      {% include "orders/selwise-order.html" %}
+
+  Why this is needed even though the shim already forwards `purchase`
+  ------------------------------------------------------------------
+  The Enhanced Ecommerce shim maps `ecommerce.purchase` to a GA4 `purchase`
+  event, and Selwise's data-layer bridge does create an order from it. That path
+  is fine, but it inherits whatever the EE payload happens to contain — and PZ's
+  `orderCompleted` payload varies per project.
+
+  `trackOrder` is the explicit path: it names the order id, the total and the
+  line items, and it is idempotent on the order id, so a customer refreshing the
+  thank-you page cannot create a second order. Campaign and widget revenue
+  reporting is built on these rows, so the explicit call is worth the ten lines.
+
+  Both paths together do NOT double-count: the server keys on `orderId`.
+
+  Identity
+  --------
+  `productItemCode` MUST be the same value the product feed carries as `item_code`.
+  In most Akinon projects that is the variant `sku`. Confirm it once against
+  the feed — a mismatch does not error, it silently files the revenue against an
+  unknown product.
+#}
+
+<script>
+  (function () {
+    'use strict';
+
+    {# Adjust these three expressions to the project's context object. The names
+       below are the PZ defaults; `orders/success.html` in some projects exposes
+       `order` under a different name. #}
+    var order = {
+      orderId: {{ order.number|tojson|safe }},
+      total: Number({{ order.amount|tojson|safe }}),
+      currency: {{ (order.currency|default('TRY'))|tojson|safe }},
+      items: [
+        {% for item in order.orderitem_set %}
+        {
+          productItemCode: {{ item.product.sku|tojson|safe }},
+          unitPrice: Number({{ item.unit_price|tojson|safe }}),
+          quantity: Number({{ (item.quantity|default(1))|tojson|safe }})
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    };
+
+    if (!order.orderId || !isFinite(order.total)) return;
+
+    // The widget loads async, so it may not be on the page yet. Retry briefly
+    // rather than dropping the order: this is the one call whose loss costs
+    // revenue attribution.
+    var attempts = 0;
+    var MAX_ATTEMPTS = 40;   // 40 × 250 ms = 10 s
+    var INTERVAL_MS = 250;
+
+    function send() {
+      if (window.Selwise && typeof window.Selwise.trackOrder === 'function') {
+        try {
+          window.Selwise.trackOrder(order);
+        } catch (error) {
+          if (window.console && console.warn) {
+            console.warn('[Selwise] trackOrder failed', error);
+          }
+        }
+        return;
+      }
+
+      attempts += 1;
+      if (attempts < MAX_ATTEMPTS) {
+        window.setTimeout(send, INTERVAL_MS);
+      } else if (window.console && console.warn) {
+        console.warn('[Selwise] widget never loaded; order ' + order.orderId + ' not sent');
+      }
+    }
+
+    send();
+  })();
+</script>

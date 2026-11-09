@@ -1,0 +1,12 @@
+{
+  "name": "@selwise/akinon-integration-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Copy-paste integration kit for Akinon Project Zero (Django), PZ Next and Appmaker storefronts.",
+  "scripts": {
+    "test": "jest --config jest.config.js"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

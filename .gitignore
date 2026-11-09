@@ -1,0 +1,11 @@
+node_modules/
+.next/
+dist/
+coverage/
+.expo/
+.env
+.env*.local
+*.tsbuildinfo
+demo-store/data/
+demo-store/export/
+.DS_Store

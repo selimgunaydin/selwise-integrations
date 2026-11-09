@@ -1,0 +1,81 @@
+{#
+  Selwise — Project Zero (Django) template include
+  ================================================
+
+  Install
+  -------
+  1. Copy this file to `templates/layout/selwise.html`.
+  2. Copy `selwise-ee-shim.js` and `selwise-basket-hook.js` to
+     `templates/utils/` (or paste their bodies inline where marked below).
+  3. Include it in `templates/layout/base.html` inside `<head>`, ABOVE the GTM
+     snippet and above the `window["dataLayer"] = ...` initialiser:
+
+         {% include "layout/selwise.html" %}
+
+  Ordering matters. The shim wraps `dataLayer.push`, and the analytics adapters
+  buffer events until GTM loads and then flush them all at once. Running first
+  means nothing is missed — though the shim also replays whatever is already in
+  the array, so a slipped ordering degrades gracefully rather than losing data.
+
+  Panel configuration this include assumes
+  ----------------------------------------
+  Integrations → Data Layer:
+    • Platform                = akinon
+    • Source variable name    = selwiseLayer     ← NOT dataLayer
+    • Page patterns           = shared/page-patterns.json
+  Sites → Installation:
+    • the site key below, and a verified domain
+
+  Why `selwiseLayer` and not `dataLayer`: the shim renames PZ's ambiguous
+  `eeEvent` / `eeCart` events to their GA4 equivalents. Writing those back into
+  `dataLayer` would feed the merchant's own GTM container and double-count every
+  hit, so they go into a private layer that only Selwise reads. See
+  `selwise-ee-shim.js` for the full reasoning.
+#}
+
+<script>
+  {# The private layer must exist before the shim or the widget touches it. #}
+  window.selwiseLayer = window.selwiseLayer || [];
+</script>
+
+{# Enhanced Ecommerce disambiguation. Inline rather than a static file so it is
+   never subject to a CDN cache miss on first paint — it must run before the
+   adapters flush. #}
+<script>{% include "utils/selwise-ee-shim.js" %}</script>
+
+{# Product identity for the PDP.
+   Selwise's DOM reader prefers JSON-LD `sku`, which `cms/seo/product_seo.html`
+   already emits, so this block is a fallback for pages where the SEO include is
+   suppressed. `product.sku` is the variant code and MUST be the same value the
+   product feed carries as `item_code`. #}
+{% if product is defined and product.sku %}
+  <script>
+    window.selwiseProduct = { code: {{ product.sku|tojson|safe }} };
+  </script>
+{% endif %}
+
+{# The widget itself. Loaded async and last: 19.9 KB gzip entry, everything
+   heavy is a lazy chunk, so it does not compete with the above-the-fold bundle. #}
+<link rel="preconnect" href="https://widget.selwise.com" crossorigin>
+<link rel="preconnect" href="https://api.selwise.com" crossorigin>
+<script>window.Selwise=window.Selwise||{};window.Selwise.q=window.Selwise.q||[];['track','trackOrder','identify','setTraits','pushDataLayer','grantConsent','revokeConsent','showConsentPreferences','withdrawConsent','endJourney'].forEach(function(m){if(!window.Selwise[m])window.Selwise[m]=function(){window.Selwise.q.push([m,arguments])}});</script>
+<script async src="https://widget.selwise.com/client.js" data-site-key="REPLACE_WITH_SITE_KEY"></script>
+
+{# Mini basket after a Selwise add, for an OLDER Django theme that listens to
+   none of the widget's basket signals: mark the header counter with
+   `data-selwise-basket-count`, and define `window.selwiseRefreshMiniBasket`
+   for anything else. A current PZ theme (`refresh-basket`,
+   `<pz-mini-basket>`) needs neither, and the hook then does nothing. #}
+<script>{% include "utils/selwise-basket-hook.js" %}</script>
+
+{# Fallback identify: the signed-in member's Akinon user id — the id the
+   server connection writes on this member's orders and permissions — so the
+   visit and the order meet on one customer even when the theme's data layer
+   names nobody. The id only: no e-mail is read in the browser. It waits for
+   the visitor's consent like every identify (the widget holds it until the
+   answer and never sends it after a refusal), and the same id is sent once. #}
+{% if current_user is defined and current_user and current_user.pk %}
+  <script>
+    window.Selwise.identify(String({{ current_user.pk|tojson|safe }}));
+  </script>
+{% endif %}

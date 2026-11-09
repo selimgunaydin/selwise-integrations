@@ -1,0 +1,7 @@
+node_modules
+.next
+data
+export
+.env
+.env*.local
+*.tsbuildinfo

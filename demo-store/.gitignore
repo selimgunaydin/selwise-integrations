@@ -1,0 +1,7 @@
+.next/
+node_modules/
+data/
+*.tsbuildinfo
+.env*.local
+# scripts/export-selwise-history.ts output: e-mail addresses and phone numbers
+export/
