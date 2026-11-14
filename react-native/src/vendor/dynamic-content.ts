@@ -1078,6 +1078,12 @@ export const PRODUCT_PLACEHOLDER_NAMES: readonly string[] = PRODUCT_PLACEHOLDERS
 
 const CAMPAIGN_PLACEHOLDER_SET: ReadonlySet<string> = new Set(CAMPAIGN_PLACEHOLDER_NAMES);
 const PRODUCT_PLACEHOLDER_SET: ReadonlySet<string> = new Set(PRODUCT_PLACEHOLDER_NAMES);
+/** The placeholders that read the shopper's cart (`{cart.total}`, `{cart.itemCount}`). */
+const CART_PLACEHOLDER_SET: ReadonlySet<string> = new Set(
+  CAMPAIGN_PLACEHOLDERS.filter((placeholder) => placeholder.source === 'cart').map(
+    (placeholder) => placeholder.name,
+  ),
+);
 const PLACEHOLDER_PROTOCOL: ReadonlyMap<string, number> = new Map(
   CAMPAIGN_PLACEHOLDERS.map((placeholder): [string, number] => [placeholder.name, placeholder.protocol]),
 );
@@ -1153,6 +1159,20 @@ export function contentUsesPlaceholders(content: Record<string, unknown> | null 
  */
 export function contentUsesProductPlaceholders(content: Record<string, unknown> | null | undefined): boolean {
   return placeholdersSaid(content).some((name) => PRODUCT_PLACEHOLDER_SET.has(name));
+}
+
+/**
+ * Does this content — or any of its states — say something about the shopper's
+ * CART (`{cart.total}`, `{cart.itemCount}`)? The sibling of the product question,
+ * and the one place "does this surface need the live cart" is decided for a
+ * campaign: the widget asks it BEFORE it loads the cart reader (a page whose
+ * campaigns never say one never loads it), and the API asks it of an experiment
+ * arm's content override so an arm that introduces the token flags the visitor's
+ * assignment (`liveCartRequired`). An unmeasured cart is never drawn
+ * (`resolveGoalBar`), so a surface that says it and has no cart simply stays hidden.
+ */
+export function contentUsesCartPlaceholders(content: Record<string, unknown> | null | undefined): boolean {
+  return placeholdersSaid(content).some((name) => CART_PLACEHOLDER_SET.has(name));
 }
 
 /**

@@ -1446,6 +1446,9 @@ describe('product enrichment', () => {
     // that cannot exist.
     expect(request.url).toContain('slots=pdp-specs');
     expect(request.url).toContain('code=KM1');
+    // Says the SDK settles each slot's winner itself; without it the server
+    // answers as it did for older releases.
+    expect(request.url).toContain('capabilities=conflicts');
   });
 
   it('asks for nothing without a code or a slot', async () => {
@@ -1455,6 +1458,21 @@ describe('product enrichment', () => {
     expect((await client.getEnrichment('', ['pdp-specs'])).items).toEqual([]);
     expect((await client.getEnrichment('KM1', [])).items).toEqual([]);
     expect((await client.getEnrichment('KM1', ['???'])).items).toEqual([]);
+    expect(calls.filter((call) => call.url.includes('/app/enrichments'))).toHaveLength(0);
+  });
+
+  it('does not ask a channel that has no enrichment', async () => {
+    // The module is not in the plan, or no rule is live: the config carries no
+    // slot at all. Every product screen would otherwise send a request that can
+    // only come back as an error or an empty list.
+    const { calls } = installEnrichment({ keys: [] });
+    const client = await init();
+    // The config has to be in: before it lands the answer is not known.
+    await client.getSurfaces('app://product');
+
+    const result = await client.getEnrichment('KM1', ['pdp-specs']);
+
+    expect(result.items).toEqual([]);
     expect(calls.filter((call) => call.url.includes('/app/enrichments'))).toHaveLength(0);
   });
 

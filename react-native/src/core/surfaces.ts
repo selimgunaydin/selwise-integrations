@@ -9,6 +9,13 @@ import {
 } from '../vendor/dynamic-content.js';
 import type { FrequencyCapConfig } from './eligibility.js';
 import { resolveCampaignForDevice } from '../vendor/campaign-devices.js';
+import {
+  decodeDismissal,
+  dismissalHolds,
+  encodeDismissal,
+  interactionVersionOf,
+  readAfterClose,
+} from '../vendor/campaign-interaction.js';
 import type { SelwiseStorage } from '../types.js';
 import { STORAGE_KEYS } from './storage.js';
 
@@ -440,23 +447,20 @@ export function resolveConflicts(
 }
 
 /**
- * Dismissals, persisted.
+ * What a close keeps away, remembered.
  *
- * A visitor who closed a popup must not meet it again on the next screen, and
- * — more importantly — not on the next launch. Without persistence the app is
- * the one surface where closing a banner accomplishes nothing, because unlike a
- * web page the process outlives the screen.
+ * Closing a surface is remembered for the campaign's `afterClose`: for the
+ * session (the default, kept in memory under the session it was made in) or
+ * for a number of days (persisted, so it survives a relaunch). A tap on the
+ * surface's own button stores nothing. The record is a digest of what the
+ * visitor saw and a time — the surface returns when its words or design change.
  */
 export class DismissalStore {
   private readonly storage: SelwiseStorage;
-  private ids = new Set<string>();
-  /**
-   * Dismissals that last one SESSION, keyed by the session they were made in.
-   * A goal bar is closed for now, not forever: the cart it talks about changes,
-   * and the web forgets the same close at the end of the session. Memory only —
-   * a relaunch after the session expired starts clean.
-   */
-  private sessionIds = new Map<string, Set<string>>();
+  /** Closes that last days: surface id -> `<version>.<time>`, persisted. */
+  private records = new Map<string, string>();
+  /** Closes that last the SESSION they were made in; memory only. */
+  private sessionRecords = new Map<string, Map<string, string>>();
   private hydrated = false;
   private readonly currentSession: () => string;
 
@@ -474,40 +478,69 @@ export class DismissalStore {
 
     try {
       const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) {
-        this.ids = new Set(parsed.filter((value): value is string => typeof value === 'string'));
+      // The earlier format was a bare list of ids kept for good: it is dropped,
+      // once — those surfaces come back and each close is remembered afresh.
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const [id, record] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof record === 'string' && decodeDismissal(record)) this.records.set(id, record);
+        }
+        return;
       }
+      await this.storage.removeItem(STORAGE_KEYS.DISMISSED_SURFACES);
     } catch {
       await this.storage.removeItem(STORAGE_KEYS.DISMISSED_SURFACES);
     }
   }
 
-  list(): string[] {
-    const forSession = this.sessionIds.get(this.currentSession()) ?? new Set<string>();
-    return [...new Set([...this.ids, ...forSession])];
+  /** The ids, among `surfaces`, whose close still holds them back. */
+  heldIds(surfaces: ReadonlyArray<DismissableSurface>, now: number = Date.now()): string[] {
+    const session = this.sessionRecords.get(this.currentSession());
+    return surfaces
+      .filter((surface) => {
+        const afterClose = readAfterClose(surface.rawPlacement?.afterClose);
+        const version = versionOf(surface);
+        const raw = afterClose === 'session' ? session?.get(surface.id) : this.records.get(surface.id);
+        const held = dismissalHolds(decodeDismissal(raw), version, afterClose, now);
+        // A days close also holds within the session it was made in.
+        return held || dismissalHolds(decodeDismissal(session?.get(surface.id)), version, afterClose, now);
+      })
+      .map((surface) => surface.id);
   }
 
-  has(id: string): boolean {
-    return this.ids.has(id) || (this.sessionIds.get(this.currentSession())?.has(id) ?? false);
-  }
-
-  async dismiss(id: string, scope: 'persistent' | 'session' = 'persistent'): Promise<void> {
-    if (!id) return;
-    if (scope === 'session') {
+  async dismiss(surface: DismissableSurface, now: number = Date.now()): Promise<void> {
+    if (!surface.id) return;
+    const record = encodeDismissal(versionOf(surface), now);
+    const afterClose = readAfterClose(surface.rawPlacement?.afterClose);
+    if (afterClose === 'session') {
       const session = this.currentSession();
       // Only the current session is ever read; older ones are dropped here.
-      const ids = this.sessionIds.get(session) ?? new Set<string>();
-      ids.add(id);
-      this.sessionIds = new Map([[session, ids]]);
+      const records = this.sessionRecords.get(session) ?? new Map<string, string>();
+      records.set(surface.id, record);
+      this.sessionRecords = new Map([[session, records]]);
       return;
     }
-    if (this.ids.has(id)) return;
-    this.ids.add(id);
-    await this.storage.setItem(STORAGE_KEYS.DISMISSED_SURFACES, JSON.stringify([...this.ids]));
+    this.records.set(surface.id, record);
+    await this.storage.setItem(STORAGE_KEYS.DISMISSED_SURFACES, JSON.stringify(Object.fromEntries(this.records)));
   }
 
   async clear(): Promise<void> {
-    this.ids = new Set();
+    this.records = new Map();
+    this.sessionRecords = new Map();
     await this.storage.removeItem(STORAGE_KEYS.DISMISSED_SURFACES);
   }
+}
+
+/** The fields a close is remembered against. */
+export type DismissableSurface = Pick<
+  Surface,
+  'id' | 'content' | 'styles' | 'customCss' | 'customJs' | 'rawPlacement'
+>;
+
+function versionOf(surface: DismissableSurface): string {
+  return interactionVersionOf({
+    contentJson: surface.content,
+    stylesJson: surface.styles,
+    customCss: surface.customCss,
+    customJs: surface.customJs,
+  });
 }

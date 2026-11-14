@@ -649,3 +649,19 @@ describe('product list events', () => {
     });
   });
 });
+
+describe('event names rn-framework-shop 7.x emits', () => {
+  const { mapEvent, HANDLED_EVENTS } = require('./mapper');
+
+  it('subscribes to removeFavourite, removeFromFavOnFl and beginCheckoutNative', () => {
+    expect(HANDLED_EVENTS).toEqual(
+      expect.arrayContaining(['removeFavourite', 'removeFromFavOnFl', 'beginCheckoutNative'])
+    );
+  });
+
+  it('records a removeFavourite as a wishlist removal of that product', () => {
+    const out = mapEvent('removeFavourite', {}, {}, { product: { sku: 'SKU-1' } });
+    expect(out.length).toBeGreaterThan(0);
+    expect(JSON.stringify(out)).toContain('SKU-1');
+  });
+});

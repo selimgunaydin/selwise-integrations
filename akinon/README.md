@@ -25,7 +25,7 @@ Ortak parçalar: [`shared/`](./shared)
 
 ```
 shared/
-  selwise-ee-shim.js      Enhanced Ecommerce olay adı belirsizliğini çözer   ← Django PZ için kritik
+  selwise-ee-shim.js      Enhanced Ecommerce olaylarını GA4 adlarına yansıtır ← çoğu projede gerekmez (ön ayar ikisini de okur)
   selwise-basket-hook.js  Selwise sepete ekledikten sonra eski temada mini sepet ← yalnız eski Django temaları
   selwise-loader.js       Çoklu pazar: hostname → siteKey                     ← tek pazarda gerekmez
   page-patterns.json      Panele girilecek düzeltilmiş sayfa desenleri        ← her projede gerekli
@@ -80,6 +80,21 @@ siler, widget bloğu tanıyamaz ve içerik iki kez basılır.
 
 Müşteriye dönük tam anlatım: `content/docs/product-enrichment/server-side.mdx`
 ve `content/docs/api-reference/ssr-api.mdx`.
+
+---
+
+## Sürüm notları
+
+**Yayımlanmamış (bu kopyadan sonraki ilk sürüm)** — kopyalarınızı güncelleyin:
+
+- `pz-classic/selwise.html`: yedek kimlik, Django şablon bağlamındaki `user`
+  değişkenini okur (`current_user` bağlamda yoktur; önceki sürüm hiç çalışmıyordu).
+- `pz-classic/selwise-order.html`: sipariş satırı fiyatı `discounted_price` /
+  `price` alanından okunur (`unit_price` yoktur), para birimi nesnesi
+  (`{value, label}`) metne çevrilir. Eski kopya sipariş sayfasında hata verebilir.
+- `shared/selwise-ee-shim.js`: küçük harfli `eepurchase` tanınır; `eeCheckout`
+  1. adım sepet görünümü (`view_cart`), 3. adım `add_shipping_info`, 4. adım
+  `add_payment_info` olarak yansıtılır. Shim'i kullanmıyorsanız bir şey yapmanız gerekmez.
 
 ---
 
@@ -173,7 +188,7 @@ sayıya yansımaz. O temada:
   tanımlayın; `basket` eklemenin döndürdüğü sepettir.
 
 **7. Yedek kimlik** — `selwise.html`, oturum açmış üyenin Akinon kullanıcı
-kimliğini (`current_user.pk`) `Selwise.identify` ile gönderir: sunucu
+kimliğini (şablon değişkeni `user.id`; `current_user` Django bağlamında yoktur) `Selwise.identify` ile gönderir: sunucu
 bağlantısının bu üyenin siparişlerine ve izinlerine yazdığı kimlik budur, tema
 veri katmanında kullanıcıyı adlandırmasa da ziyaret ve sipariş aynı müşteride
 buluşur. Yalnız kimlik gider; e-posta tarayıcıda okunmaz. Ziyaretçinin onayını
@@ -203,9 +218,17 @@ grep -c "eeEvent\|eeCart" src/utils/gtm.ts   # 0 ise shim gerekmez
 
 **3. Script** — iki yol var:
 
-**(a) Kod deploy'u olmadan (önerilen).** PZ Next kök layout'u Omnitron'daki
-`external-gtm` CMS widget'ının ham `head` HTML'ini basıyor. Panelden şu bloğu
-o widget'a yapıştırın — dört satırın dördü de gerekli, ortadaki komut kuyruğu
+**(a) Kod deploy'u olmadan: mağazanın GTM kapsayıcısı.** Omnitron ve ACC'de
+vitrine script ekleyen bir alan yok. `external-gtm` CMS widget'ı yalnız bazı
+projelerde var ve **JavaScript olarak** çalıştırılıyor (kimi projede bir
+`<Script>` içinde, kimi yalnız tek `<script>` sarmalını açarak) — aşağıdaki
+HTML'i oraya yapıştırmak sözdizimi hatası verir ve aynı alandaki GTM kodunu da
+durdurabilir. GTM'de **Custom HTML** etiketi kullanın
+(`selwise.com/docs/integration/widget-installation`);
+`shared/selwise-loader.js` saf JavaScript olduğu için `external-gtm` alanına da
+yapıştırılabilir. Kanalın doğrulanması (Verify Now) ham HTML'de
+`data-site-key` aradığından GTM ile eklenen etiket bu kontrolde görünmez.
+Etiketin içeriği — dört satırın dördü de gerekli, ortadaki komut kuyruğu
 olmadan `async` yükleme sipariş çağrılarını sessizce düşürür:
 
 ```html

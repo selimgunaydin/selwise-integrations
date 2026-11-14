@@ -790,6 +790,9 @@ const MAPPERS = {
   cartChanges,
   basketImpression,
   checkoutImpression,
+  // Native (in-app) checkout opens with this instead of the web checkout's
+  // impression; the basket it reads is the same.
+  beginCheckoutNative: checkoutImpression,
   addShippingInfo,
   addPaymentInfo,
   measuringPurchases,
@@ -808,6 +811,10 @@ const MAPPERS = {
   removeFromFav,
   removeFromFavOnPd,
   removeFromFavOnPl: removeFromFav,
+  // The names rn-framework-shop 7.x actually emits: the product and list
+  // screens send `removeFavourite`, the favourites list `removeFromFavOnFl`.
+  removeFavourite: removeFromFav,
+  removeFromFavOnFl: removeFromFav,
   couponUsed,
   cancelOrder,
   currentUser: identityFrom,

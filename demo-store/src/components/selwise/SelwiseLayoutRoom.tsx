@@ -3,19 +3,17 @@
 import { useEffect } from 'react';
 
 /**
- * Make room for Selwise's fixed surfaces, the way a real theme would.
+ * Make room for Selwise's bottom surfaces, the way a real theme would.
  *
- * The widget draws its top bars (announcement, countdown) `position: fixed;
- * top: 0` on <body> — it has no inline placement for them — so on this store
- * they covered the sticky header and the logo, and two bars on one page sat on
- * top of each other. Its bottom surfaces (sticky footer, floating button) sat
- * on the product page's mobile buy bar.
+ * Top bars need nothing from the store: the widget stacks them and pads
+ * <body> by their height itself, and publishes that height as `--ws-edge-top`
+ * on <html> (globals.css moves the sticky header down by it). Padding the page
+ * here as well would reserve the room twice.
  *
- * This measures them and publishes two CSS variables that globals.css uses:
- * --selwise-top-bar (the stacked height of every top bar: the page is padded
- * and the header offset by it) and --store-bottom-bar (the height of the
- * store's own mobile buy bar, which Selwise's bottom surfaces sit above). Both
- * are 0 when there is nothing to make room for.
+ * The bottom surfaces (sticky footer, floating button) sit on the product
+ * page's mobile buy bar, which only the store knows about. This publishes
+ * --store-bottom-bar, the height of that buy bar, for globals.css to lift
+ * them above it; it is 0 when the buy bar is not on screen.
  */
 export function SelwiseLayoutRoom() {
   useEffect(() => {
@@ -31,14 +29,6 @@ export function SelwiseLayoutRoom() {
     };
 
     function apply() {
-      let offset = 0;
-      document.querySelectorAll<HTMLElement>('.selwise-bar.selwise-bar-top').forEach((bar) => {
-        watch(bar);
-        bar.style.top = `${offset}px`;
-        offset += Math.round(bar.getBoundingClientRect().height);
-      });
-      root.style.setProperty('--selwise-top-bar', `${offset}px`);
-
       const buyBar = document.getElementById('pdp-sticky-bar');
       if (buyBar) watch(buyBar);
       const visible = buyBar && getComputedStyle(buyBar).display !== 'none';
@@ -64,7 +54,6 @@ export function SelwiseLayoutRoom() {
       mutations.disconnect();
       resize?.disconnect();
       window.removeEventListener('resize', schedule);
-      root.style.removeProperty('--selwise-top-bar');
       root.style.removeProperty('--store-bottom-bar');
     };
   }, []);

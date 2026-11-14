@@ -71,7 +71,7 @@
   };
 
   /** Event names that are containers for an EE action rather than intents themselves. */
-  var AMBIGUOUS_EVENTS = { eeEvent: true, eeCart: true, eeCheckout: true, eePurchase: true };
+  var AMBIGUOUS_EVENTS = { eeEvent: true, eeCart: true, eeCheckout: true, eePurchase: true, eepurchase: true };
 
   /** Order in which to probe the `ecommerce` object; first hit wins. */
   var ACTION_KEYS = [
@@ -126,6 +126,14 @@
     if (!action) return null;
 
     var mapped = ACTION_TO_GA4[action];
+    // Project Zero numbers its checkout: 1 basket, 2 sign-in, 3 address,
+    // 4 payment. Step 1 is a look at the basket, not a checkout begun.
+    if (action === 'checkout') {
+      var step = Number(item.ecommerce.checkout.actionField && item.ecommerce.checkout.actionField.step);
+      if (step === 1) mapped = 'view_cart';
+      else if (step === 3) mapped = 'add_shipping_info';
+      else if (step === 4) mapped = 'add_payment_info';
+    }
     if (!mapped) return null;
 
     var mirrored = {};

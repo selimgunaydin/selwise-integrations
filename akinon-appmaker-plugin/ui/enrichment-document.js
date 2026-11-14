@@ -78,14 +78,17 @@ function bridgeScript() {
     '    var node = event.target;',
     '    var url = "";',
     '    var id = "";',
+    '    var actionable = false;',
     '    while (node && node !== document) {',
+    '      var tag = node.tagName;',
+    '      if (tag === "A" || tag === "BUTTON" || tag === "SUMMARY" || (node.hasAttribute && node.hasAttribute("data-selwise-click"))) actionable = true;',
     '      if (!url && node.tagName === "A" && node.getAttribute("href")) url = node.getAttribute("href");',
     '      if (!id && node.hasAttribute && node.hasAttribute(' + JSON.stringify(ENRICHMENT_ENTITY_ID_ATTR) + ')) {',
     '        id = node.getAttribute(' + JSON.stringify(ENRICHMENT_ENTITY_ID_ATTR) + ');',
     '      }',
     '      node = node.parentNode;',
     '    }',
-    '    if (url || id) post("click", { url: url, assignmentId: id });',
+    '    if (actionable && (url || id)) post("click", { url: url, assignmentId: id });',
     '  }, true);',
     '})();',
   ].join('\n');
@@ -140,6 +143,9 @@ function buildEnrichmentDocument(items, options) {
   const html = [
     '<!doctype html><html><head>',
     '<meta charset="utf-8">',
+    /^https?:\/\/[^\s"'<>]+$/i.test(str(settings.baseUrl).trim())
+      ? '<base href="' + str(settings.baseUrl).trim().replace(/\/?$/, '/') + '">'
+      : '',
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">',
     '<style>',
     'html,body{margin:0;padding:0;background:transparent;-webkit-text-size-adjust:100%;}',

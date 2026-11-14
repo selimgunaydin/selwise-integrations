@@ -33,6 +33,14 @@
   `selwise-ee-shim.js` for the full reasoning.
 #}
 
+{# The Selwise head bootstrap: the command queue plus the code that hides what a
+   page experiment is about to change BEFORE the page paints. It must be the
+   FIRST thing this include prints (and this include the first thing in `<head>`):
+   below the first paint it can only follow a flash. Replace REPLACE_WITH_SITE_KEY,
+   and copy the current version from the Selwise dashboard (Channels → the
+   channel → Install) when it changes. #}
+<script data-selwise-boot="2">window.Selwise=window.Selwise||{};window.Selwise.q=window.Selwise.q||[];['track','trackOrder','identify','setTraits','pushDataLayer','grantConsent','revokeConsent','showConsentPreferences','withdrawConsent','endJourney'].forEach(function(m){if(!window.Selwise[m])window.Selwise[m]=function(){window.Selwise.q.push([m,arguments])}});(function(w,d,k){if(w.__selwise_ph)return;var P=w.__selwise_ph={v:2,s:[],ids:[],dl:1000},st,pf=w.performance;P.hid=function(x){return!P.r&&!!P.h&&(!!P.pg||P.s.indexOf(x)>-1)};P.reveal=function(r){if(P.r)return;P.r=r||'deadline';if(st&&st.parentNode)st.parentNode.removeChild(st);if(P.on)try{P.on(P.r)}catch(e){}};try{var p=JSON.parse(localStorage.getItem('selwise_prehide_'+k)||'null'),t=Date.now(),h=location.href,c=[],x='',i,j,o,hd=d.head||d.documentElement,A=function(l){if(l)for(var n=0;n<l.length;n++)try{if(new RegExp(l[n][0]).test(l[n][1]==2?location.pathname:l[n][1]?h.toLowerCase():h))return 1}catch(e){}return 0},M=function(o){return!o.r||!A(o.r.x)&&(o.r.a==1||A(o.r.i))};if(!p||!p.e||!(t-p.w>=0&&t-p.w<604800000))return;if(p.u&&w.fetch){P.u=p.u;P.cfg=fetch(p.u,{method:'GET'})}for(i=0;i<p.e.length;i++){o=p.e[i];if(!o||!o.s||!M(o))continue;P.ids.push(o.id);if(o.k=='p')P.pg=1;for(j=0;j<o.s.length;j++)if(P.s.indexOf(o.s[j])<0)P.s.push(o.s[j])}if(p.c)for(i=0;i<p.c.length;i++){o=p.c[i];if(o&&o.css&&M(o))c.push(o.css)}if(c.length){o=d.createElement('style');o.id='selwise-prehide-css';o.textContent=c.join('\n');hd.appendChild(o)}if(P.pg)x='html{opacity:0!important}';for(i=0;i<P.s.length;i++)x+=P.s[i]+'{visibility:hidden!important}';if(!x)return;st=d.createElement('style');st.id='selwise-prehide';st.textContent=x;hd.appendChild(st);P.h=1;P.t0=pf&&pf.now?pf.now():0;setTimeout(function(){P.reveal('deadline')},Math.max(0,P.dl-P.t0))}catch(e){P.reveal('engine_error')}})(window,document,"REPLACE_WITH_SITE_KEY");</script>
+
 <script>
   {# The private layer must exist before the shim or the widget touches it. #}
   window.selwiseLayer = window.selwiseLayer || [];
@@ -58,7 +66,6 @@
    heavy is a lazy chunk, so it does not compete with the above-the-fold bundle. #}
 <link rel="preconnect" href="https://widget.selwise.com" crossorigin>
 <link rel="preconnect" href="https://api.selwise.com" crossorigin>
-<script>window.Selwise=window.Selwise||{};window.Selwise.q=window.Selwise.q||[];['track','trackOrder','identify','setTraits','pushDataLayer','grantConsent','revokeConsent','showConsentPreferences','withdrawConsent','endJourney'].forEach(function(m){if(!window.Selwise[m])window.Selwise[m]=function(){window.Selwise.q.push([m,arguments])}});</script>
 <script async src="https://widget.selwise.com/client.js" data-site-key="REPLACE_WITH_SITE_KEY"></script>
 
 {# Mini basket after a Selwise add, for an OLDER Django theme that listens to
@@ -74,8 +81,8 @@
    names nobody. The id only: no e-mail is read in the browser. It waits for
    the visitor's consent like every identify (the widget holds it until the
    answer and never sends it after a refusal), and the same id is sent once. #}
-{% if current_user is defined and current_user and current_user.pk %}
+{% if user is defined and user and user.is_authenticated and user.id %}
   <script>
-    window.Selwise.identify(String({{ current_user.pk|tojson|safe }}));
+    window.Selwise.identify(String({{ user.id|tojson|safe }}));
   </script>
 {% endif %}

@@ -622,6 +622,8 @@ class SelwisePlugin {
       fontFamily: configured.fontFamily || tokens['--selwise-font'] || '',
       fontSize: configured.fontSize || '14px',
       padding: configured.padding || '0px',
+      // So a relative image (`/media/size-chart.png`) in a block resolves against the shop.
+      baseUrl: storefrontOrigin() || '',
     };
   }
 

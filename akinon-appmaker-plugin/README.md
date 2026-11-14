@@ -301,6 +301,13 @@ Most App Maker apps run checkout in a WebView, so without a bridge the most
 valuable part of the funnel is unmeasured. `Selwise.webViewBridge()` returns
 the SDK's bridge; inject its script into the WebView and forward the messages.
 
+## Release notes
+
+**Unreleased.** The plugin now also subscribes to `removeFavourite` and
+`removeFromFavOnFl` (wishlist removals from the product, list and favourites
+screens) and `beginCheckoutNative` (the in-app checkout's first step). Apps
+that emit these names previously lost those events silently.
+
 ## Tests
 
 The tests are not shipped in the published package — they live with the source

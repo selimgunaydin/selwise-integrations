@@ -41,6 +41,7 @@ export {
   EnrichmentCache,
   EMPTY_ENRICHMENT,
   itemsForSlot,
+  keepSlotWinners,
   normalizeEnrichment,
   normalizeEnrichmentItem,
   normalizePlacementKey,

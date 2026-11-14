@@ -191,3 +191,26 @@ describe('install', () => {
     expect(window.dataLayer.push({ event: 'view_cart' })).toBe(2);
   });
 });
+
+describe('toMirroredEvent: Project Zero checkout steps and eepurchase', () => {
+  const { toMirroredEvent } = loadShim();
+  const step = (n) => toMirroredEvent({
+    event: 'eeCheckout',
+    ecommerce: { checkout: { actionField: { step: n }, products: [{ id: '1' }] } },
+  });
+
+  it('reads step 1 as the basket and 2-4 as the checkout funnel', () => {
+    expect(step(1).event).toBe('view_cart');
+    expect(step(2).event).toBe('begin_checkout');
+    expect(step(3).event).toBe('add_shipping_info');
+    expect(step(4).event).toBe('add_payment_info');
+  });
+
+  it('resolves the lowercase eepurchase the stock adapter pushes', () => {
+    const result = toMirroredEvent({
+      event: 'eepurchase',
+      ecommerce: { purchase: { actionField: { id: '339' }, products: [{ id: '1' }] } },
+    });
+    expect(result.event).toBe('purchase');
+  });
+});

@@ -33,7 +33,7 @@
  */
 
 const React = require('react');
-const { StyleSheet, View } = require('react-native');
+const { AppState, Dimensions, StyleSheet, View } = require('react-native');
 
 const {
   buildEnrichmentDocument,
@@ -62,8 +62,16 @@ function tallestReservation(items) {
   return tallest;
 }
 
+// The browser widget's definition (`core/viewability.ts`): an embedded block is
+// viewed once half of it is on screen, or it fills half the screen, and the app
+// is in the foreground.
+const VIEWABLE_FRACTION = 0.5;
+
 function SelwiseEnrichment(props) {
   const { plugin, code, slot, style, theme, onNavigate } = props;
+  const hostRef = React.useRef(null);
+  const [viewable, setViewable] = React.useState(false);
+  const [foreground, setForeground] = React.useState(AppState.currentState !== 'background');
 
   const [items, setItems] = React.useState([]);
   const [height, setHeight] = React.useState(0);
@@ -79,6 +87,7 @@ function SelwiseEnrichment(props) {
     // another's title is worse than showing nothing.
     setItems([]);
     setHeight(0);
+    setViewable(false);
     seen.current = new Set();
 
     if (!plugin || !plugin.selwise || !productCode || !slotName) return undefined;
@@ -109,17 +118,43 @@ function SelwiseEnrichment(props) {
     [items, theme, plugin]
   );
 
+  React.useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => setForeground(state !== 'background'));
+    return () => {
+      if (subscription && subscription.remove) subscription.remove();
+    };
+  }, []);
+
+  // Until the block is half on screen the check repeats; a scroll view gives no
+  // callback to a child, so a short poll is the cost of the same definition.
+  React.useEffect(() => {
+    if (viewable || !document_ || !foreground) return undefined;
+    const check = () => {
+      const node = hostRef.current;
+      if (!node || typeof node.measureInWindow !== 'function') return;
+      node.measureInWindow((_x, y, _w, blockHeight) => {
+        if (!(blockHeight > 0)) return;
+        const windowHeight = Dimensions.get('window').height;
+        const shown = Math.min(y + blockHeight, windowHeight) - Math.max(y, 0);
+        if (shown >= Math.min(blockHeight, windowHeight) * VIEWABLE_FRACTION) setViewable(true);
+      });
+    };
+    check();
+    const timer = setInterval(check, 500);
+    return () => clearInterval(timer);
+  }, [viewable, document_, foreground, height]);
+
   // The impression belongs to the moment content became visible, and one per
   // RULE however many blocks it stacks — the server puts a rule's blocks into
   // one root for exactly that reason.
   React.useEffect(() => {
-    if (!plugin || !plugin.selwise || !document_) return;
+    if (!plugin || !plugin.selwise || !document_ || !viewable || !foreground) return;
     for (const item of items) {
       if (seen.current.has(item.assignmentId)) continue;
       seen.current.add(item.assignmentId);
       plugin.selwise.trackEnrichmentView(item);
     }
-  }, [plugin, document_, items.map((item) => item.assignmentId).join(',')]);
+  }, [plugin, document_, viewable, foreground, items.map((item) => item.assignmentId).join(',')]);
 
   if (!document_) return null;
 
@@ -162,7 +197,7 @@ function SelwiseEnrichment(props) {
 
   return h(
     View,
-    { style: [sheet.host, measured > 0 ? { height: measured } : sheet.collapsed, style] },
+    { ref: hostRef, collapsable: false, style: [sheet.host, measured > 0 ? { height: measured } : sheet.collapsed, style] },
     h(WebView, {
       originWhitelist: ['about:*'],
       source: { html: document_.html, baseUrl: '' },

@@ -108,15 +108,13 @@
 }
 
 /*
- * Room for Selwise's fixed surfaces (components/selwise/SelwiseLayoutRoom):
- * the top bars are stacked above the page and the sticky header, and the
- * bottom surfaces sit above the product page's mobile buy bar.
+ * Room for Selwise's fixed surfaces. The widget stacks the top bars and pads
+ * <body> by their height itself, publishing it as --ws-edge-top; the sticky
+ * header follows it. The bottom surfaces sit above the product page's mobile
+ * buy bar (components/selwise/SelwiseLayoutRoom).
  */
-body {
-  padding-top: var(--selwise-top-bar, 0px);
-}
 #site-header {
-  top: var(--selwise-top-bar, 0px);
+  top: var(--ws-edge-top, 0px);
 }
 .selwise-bar-bottom,
 .selwise-footer {

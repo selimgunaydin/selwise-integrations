@@ -48,6 +48,7 @@ import {
 import {
   EnrichmentCache,
   itemsForSlot,
+  keepSlotWinners,
   normalizeEnrichment,
   normalizePlacementKeys,
   selectByTestMode,
@@ -1283,14 +1284,15 @@ export class Selwise {
       testMode: this.testMode,
       segments: this.segments,
     });
-    const onScreen = selectSurfaces(this.withVariantModules(this.surfaces, arms), {
+    const candidates = this.withVariantModules(this.surfaces, arms);
+    const onScreen = selectSurfaces(candidates, {
       ...targetingContext,
       ...(behavior ? { behavior } : {}),
       pageUrl: screen,
       deviceType,
       ...(country ? { country } : {}),
       testMode: this.testMode,
-      dismissedIds: this.dismissals.list(),
+      dismissedIds: this.dismissals.heldIds(candidates),
     });
     const contentContext = {
       behavior,
@@ -1704,16 +1706,18 @@ export class Selwise {
    * is the one surface where closing a popup accomplishes nothing, since the
    * next navigation re-evaluates the same list.
    */
-  async dismissSurface(surface: Pick<Surface, 'id' | 'kind' | 'type'>): Promise<void> {
+  async dismissSurface(
+    surface: Pick<Surface, 'id' | 'kind' | 'type' | 'content' | 'styles' | 'customCss' | 'customJs' | 'rawPlacement'>,
+  ): Promise<void> {
     this.assertReady();
     this.track('close', {
       entityType: 'campaign',
       entityId: surface.id,
       metadata: { surfaceType: surface.type },
     });
-    // A goal bar is closed for the session (its cart moves on); everything
-    // else stays closed across launches.
-    await this.dismissals.dismiss(surface.id, surface.type === 'goal_bar' ? 'session' : 'persistent');
+    // How long the close holds is the surface's own `afterClose` (this
+    // session by default, or a number of days that survives a relaunch).
+    await this.dismissals.dismiss(surface);
   }
 
   /**
@@ -1914,13 +1918,19 @@ export class Selwise {
     const productCode = String(code ?? '').trim();
     const keys = normalizePlacementKeys(slots ?? []);
     if (!productCode || keys.length === 0) return { ...EMPTY_ENRICHMENT, code: productCode };
+    // Decided before asking. Once the channel's config is in, a channel with no
+    // enrichment — the module is not in its plan, or no rule is live — answers
+    // no product screen with anything but an error or an empty list, so the
+    // request is not sent. Before the config lands the answer is not known, and
+    // the request goes out as it always did.
+    if (this.remote && !this.remote.hasEnrichment) return { ...EMPTY_ENRICHMENT, code: productCode };
     if (await this.controlGroupDecided()) return { ...EMPTY_ENRICHMENT, code: productCode };
 
     // The stamp comes from `/config`, so a screen that renders before the
     // bootstrap lands simply misses the cache once rather than serving stale
     // markup off an unknown version.
     const stamp = this.remote?.enrichmentVersion ?? '';
-    const cached = this.enrichmentCache.get(productCode, keys, stamp);
+    const cached = this.enrichmentCache.get(productCode, keys, stamp, this.testMode ? 'test' : '');
 
     const result =
       cached ??
@@ -1934,7 +1944,7 @@ export class Selwise {
       );
 
     if (!cached && result.v) {
-      this.enrichmentCache.set(productCode, keys, result);
+      this.enrichmentCache.set(productCode, keys, result, this.testMode ? 'test' : '');
     }
 
     const visible: EnrichmentItem[] = [];
@@ -1951,7 +1961,8 @@ export class Selwise {
       visible.push(item);
     }
 
-    return { ...result, items: visible };
+    // After targeting, so a slot's winner is the first rule this visitor can see.
+    return { ...result, items: keepSlotWinners(visible) };
   }
 
   /** The rules for one slot, in stacking order. */

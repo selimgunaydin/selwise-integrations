@@ -26,8 +26,8 @@ export interface IntegrationPoint {
 export const INTEGRATION_MAP: IntegrationPoint[] = [
   {
     title: 'Kurulum kodu',
-    what: 'Komut kuyruğu taslağı ve client.js, sunucu HTML’inde. Alan adı doğrulaması ana sayfanın ham HTML’inde data-site-key arar.',
-    files: ['src/components/selwise/SelwiseHead.tsx', 'src/lib/selwise/config.ts'],
+    what: 'Head kodu (komut kuyruğu ve sayfa çizilmeden önce gizleme) ve client.js, sunucu HTML’inin head bölümünde, en üstte. Alan adı doğrulaması ana sayfanın ham HTML’inde data-site-key arar.',
+    files: ['src/components/selwise/SelwiseHead.tsx', 'src/lib/selwise/head-bootstrap.ts', 'src/lib/selwise/config.ts'],
     docs: [['Widget kurulumu', 'integration/widget-installation']],
   },
   {

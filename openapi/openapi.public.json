@@ -528,7 +528,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -551,9 +551,14 @@
         "tags": [
           "public"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
         "x-selwise-tier": "integration",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-dry-run": true,
         "x-selwise-playground": true
       }
@@ -606,7 +611,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -629,9 +634,14 @@
         "tags": [
           "public"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
         "x-selwise-tier": "integration",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-dry-run": true,
         "x-selwise-playground": true
       }
@@ -684,7 +694,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -707,9 +717,14 @@
         "tags": [
           "public"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
         "x-selwise-tier": "integration",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-dry-run": true,
         "x-selwise-playground": true
       }
@@ -2037,6 +2052,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "capabilities",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2049,6 +2072,9 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "The account's plan does not include product enrichment (`MODULE_NOT_ENTITLED`). A client reads `enrichment.enabled` / `enrichment.keys` from `/config` first and does not call this when there is nothing to ask."
           },
           "4XX": {
             "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
@@ -2207,6 +2233,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "capabilities",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2219,6 +2253,9 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "The account's plan does not include product enrichment (`MODULE_NOT_ENTITLED`). A client reads `enrichment.enabled` / `enrichment.keys` from `/config` first and does not call this when there is nothing to ask."
           },
           "4XX": {
             "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
@@ -2392,6 +2429,9 @@
           },
           "304": {
             "description": "`If-None-Match` matched the digest (`v`)."
+          },
+          "402": {
+            "description": "The account's plan does not include product enrichment (`MODULE_NOT_ENTITLED`). Answer the page without the slot: every shipped caller already treats a non-200 as empty."
           },
           "4XX": {
             "description": "400 invalid input · 401 no key sent · 402 module not in the contract · 403 key invalid or out of scope · 404 unknown channel key · 429 rate limit",
@@ -3354,256 +3394,6 @@
         "x-selwise-playground": false
       }
     },
-    "/public/experiments/assign": {
-      "get": {
-        "operationId": "PublicExperimentsController_assignVariants",
-        "summary": "Get variant assignments for a visitor",
-        "parameters": [
-          {
-            "name": "siteKey",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "visitorId",
-            "required": true,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "p",
-            "required": false,
-            "in": "query",
-            "description": "The `/config` protocol the client speaks (`CONFIG_PROTOCOL_CURRENT`), 1 when absent. A client below what an experiment's arms say or check (a placeholder in an override, a product condition, a variant module that needs more) is kept out of that experiment, in every arm.",
-            "schema": {}
-          },
-          {
-            "name": "capabilities",
-            "required": false,
-            "in": "query",
-            "description": "What the client can honour, comma-separated. `holdout`: an arm flagged `holdout` draws nothing. `audience`: the client applies an arm, and counts the visitor, only where its `audience` (the experiment's own page, device, country, behaviour, segment and test-mode rules) matches. A client that does not declare one is kept out of every experiment that needs it.",
-            "schema": {}
-          },
-          {
-            "name": "forceVariant",
-            "required": false,
-            "in": "query",
-            "description": "QA override, `<experimentId>:<variantId>`, repeatable. Bypasses the hash AND the traffic gate; the widget counts nothing for a forced arm.",
-            "schema": {}
-          },
-          {
-            "name": "lang",
-            "required": false,
-            "in": "query",
-            "description": "The visitor's language (`tr`, `en`…), matched to the account's languages; the default language otherwise.",
-            "schema": {}
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Keyed by experiment id.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/components/schemas/ExperimentAssignment"
-                  }
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "5XX": {
-            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Public Experiments"
-        ],
-        "security": [],
-        "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified",
-        "x-selwise-playground": false
-      }
-    },
-    "/public/experiments/track": {
-      "post": {
-        "operationId": "PublicExperimentsController_trackEvent",
-        "summary": "Track experiment event",
-        "parameters": [
-          {
-            "name": "siteKey",
-            "required": true,
-            "in": "query",
-            "description": "Site key for tracking context",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TrackExperimentEventDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExperimentTrackResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "5XX": {
-            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Public Experiments"
-        ],
-        "security": [],
-        "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified",
-        "x-selwise-playground": false
-      }
-    },
-    "/public/feeds/{token}": {
-      "post": {
-        "operationId": "PublicFeedsController_updateFeed",
-        "summary": "Update product feed via public API token",
-        "parameters": [
-          {
-            "name": "token",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "string",
-                "example": "<products><product><id>1</id>...</product></products>"
-              }
-            },
-            "application/xml": {
-              "schema": {
-                "type": "string",
-                "example": "<products><product><id>1</id>...</product></products>"
-              }
-            },
-            "text/xml": {
-              "schema": {
-                "type": "string",
-                "example": "<products><product><id>1</id>...</product></products>"
-              }
-            },
-            "text/csv": {
-              "schema": {
-                "type": "string",
-                "example": "<products><product><id>1</id>...</product></products>"
-              }
-            },
-            "text/plain": {
-              "schema": {
-                "type": "string",
-                "example": "<products><product><id>1</id>...</product></products>"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FeedPushResult"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "400 unreadable feed · 404 unknown feed token · 409 a sync of this feed is running · 413 too large · 429 rate limit",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          },
-          "5XX": {
-            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiError"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "public-feeds"
-        ],
-        "security": [],
-        "x-selwise-tier": "integration",
-        "x-selwise-auth": "token",
-        "x-selwise-playground": false
-      }
-    },
     "/public/sites/{siteKey}/unsubscribe": {
       "get": {
         "operationId": "MessagingPublicController_unsubscribe",
@@ -4000,6 +3790,256 @@
         "x-selwise-auth": "verified",
         "x-selwise-playground": false
       }
+    },
+    "/public/experiments/assign": {
+      "get": {
+        "operationId": "PublicExperimentsController_assignVariants",
+        "summary": "Get variant assignments for a visitor",
+        "parameters": [
+          {
+            "name": "siteKey",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visitorId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "p",
+            "required": false,
+            "in": "query",
+            "description": "The `/config` protocol the client speaks (`CONFIG_PROTOCOL_CURRENT`), 1 when absent. A client below what an experiment's arms say or check (a placeholder in an override, a product condition, a variant module that needs more) is kept out of that experiment, in every arm.",
+            "schema": {}
+          },
+          {
+            "name": "capabilities",
+            "required": false,
+            "in": "query",
+            "description": "What the client can honour, comma-separated. `holdout`: an arm flagged `holdout` draws nothing. `audience`: the client applies an arm, and counts the visitor, only where its `audience` (the experiment's own page, device, country, behaviour, segment and test-mode rules) matches. A client that does not declare one is kept out of every experiment that needs it.",
+            "schema": {}
+          },
+          {
+            "name": "forceVariant",
+            "required": false,
+            "in": "query",
+            "description": "QA override, `<experimentId>:<variantId>`, repeatable. Bypasses the hash AND the traffic gate; the widget counts nothing for a forced arm.",
+            "schema": {}
+          },
+          {
+            "name": "lang",
+            "required": false,
+            "in": "query",
+            "description": "The visitor's language (`tr`, `en`…), matched to the account's languages; the default language otherwise.",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keyed by experiment id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/ExperimentAssignment"
+                  }
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Public Experiments"
+        ],
+        "security": [],
+        "x-selwise-tier": "widget",
+        "x-selwise-auth": "verified",
+        "x-selwise-playground": false
+      }
+    },
+    "/public/experiments/track": {
+      "post": {
+        "operationId": "PublicExperimentsController_trackEvent",
+        "summary": "Track experiment event",
+        "parameters": [
+          {
+            "name": "siteKey",
+            "required": true,
+            "in": "query",
+            "description": "Site key for tracking context",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackExperimentEventDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentTrackResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Public Experiments"
+        ],
+        "security": [],
+        "x-selwise-tier": "widget",
+        "x-selwise-auth": "verified",
+        "x-selwise-playground": false
+      }
+    },
+    "/public/feeds/{token}": {
+      "post": {
+        "operationId": "PublicFeedsController_updateFeed",
+        "summary": "Update product feed via public API token",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string",
+                "example": "<products><product><id>1</id>...</product></products>"
+              }
+            },
+            "application/xml": {
+              "schema": {
+                "type": "string",
+                "example": "<products><product><id>1</id>...</product></products>"
+              }
+            },
+            "text/xml": {
+              "schema": {
+                "type": "string",
+                "example": "<products><product><id>1</id>...</product></products>"
+              }
+            },
+            "text/csv": {
+              "schema": {
+                "type": "string",
+                "example": "<products><product><id>1</id>...</product></products>"
+              }
+            },
+            "text/plain": {
+              "schema": {
+                "type": "string",
+                "example": "<products><product><id>1</id>...</product></products>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedPushResult"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "400 unreadable feed · 404 unknown feed token · 409 a sync of this feed is running · 413 too large · 429 rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "public-feeds"
+        ],
+        "security": [],
+        "x-selwise-tier": "integration",
+        "x-selwise-auth": "token",
+        "x-selwise-playground": false
+      }
     }
   },
   "components": {
@@ -4107,6 +4147,13 @@
           },
           "isTestMode": {
             "type": "boolean"
+          },
+          "conflictBehavior": {
+            "type": "string",
+            "enum": [
+              "exclusive"
+            ],
+            "description": "Only when the rule is `exclusive`: if it is the first rule left in its slot after segment and test-mode targeting, it keeps the slot's other rules off the screen. Absent means the rule stacks."
           }
         },
         "required": [
@@ -4491,6 +4538,11 @@
           "onsite": {
             "$ref": "#/components/schemas/ConfigOnsite"
           },
+          "prehide": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Internal to the widget: what the next page hides before it paints and the CSS it paints directly. Stored on the device and read by the head bootstrap; it names surfaces, never the visitor."
+          },
           "scenarios": {
             "$ref": "#/components/schemas/ConfigScenarios"
           },
@@ -4519,6 +4571,7 @@
           "search",
           "enrichment",
           "onsite",
+          "prehide",
           "scenarios",
           "webPush",
           "theme",
@@ -4798,6 +4851,13 @@
               "mobile"
             ],
             "description": "Only when the rule is for one device: `mobile` (a viewport below 768px) or `desktop`. Absent means every device."
+          },
+          "conflictBehavior": {
+            "type": "string",
+            "enum": [
+              "exclusive"
+            ],
+            "description": "Only when the rule is `exclusive`: if it wins its placement it keeps the placement's other rules off the page. The response ships every candidate a segment or a device could still remove, so the widget applies this once it knows who is looking. Absent means the rule stacks."
           }
         },
         "required": [

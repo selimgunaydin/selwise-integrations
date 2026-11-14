@@ -196,48 +196,77 @@ describe('selectSurfaces', () => {
 });
 
 describe('DismissalStore', () => {
-  it('remembers a dismissal across a restart', async () => {
-    const storage = new MemoryStorage();
+  const surface = (over: Record<string, unknown> = {}) =>
+    ({
+      id: 'camp-1',
+      content: { text: 'Free shipping' },
+      styles: { padding: '12px' },
+      customCss: '',
+      customJs: '',
+      rawPlacement: {},
+      ...over,
+    }) as any;
+  const NOW = Date.UTC(2026, 10, 13);
 
+  it('holds a session close for the session it was made in, and forgets it with the session', async () => {
+    const storage = new MemoryStorage();
+    let session = 's1';
+    const store = new DismissalStore(storage, () => session);
+    await store.hydrate();
+    await store.dismiss(surface(), NOW);
+    expect(store.heldIds([surface()], NOW)).toEqual(['camp-1']);
+    expect(await storage.getItem('selwise_dismissed')).toBeNull();
+
+    session = 's2';
+    expect(store.heldIds([surface()], NOW)).toEqual([]);
+  });
+
+  it('remembers a days close across a restart, then lets the surface back', async () => {
+    const storage = new MemoryStorage();
     const first = new DismissalStore(storage);
     await first.hydrate();
-    await first.dismiss('camp-1');
+    const long = surface({ rawPlacement: { afterClose: { days: 2 } } });
+    await first.dismiss(long, NOW);
 
     const second = new DismissalStore(storage);
     await second.hydrate();
-    expect(second.has('camp-1')).toBe(true);
+    expect(second.heldIds([long], NOW + 86_400_000)).toEqual(['camp-1']);
+    expect(second.heldIds([long], NOW + 2 * 86_400_000)).toEqual([]);
+  });
+
+  it('brings the surface back when its words or design change, not when targeting does', async () => {
+    const store = new DismissalStore(new MemoryStorage());
+    await store.hydrate();
+    await store.dismiss(surface(), NOW);
+    expect(store.heldIds([surface({ targeting: { x: 1 } })], NOW)).toEqual(['camp-1']);
+    expect(store.heldIds([surface({ content: { text: 'New words' } })], NOW)).toEqual([]);
+  });
+
+  it('drops the earlier bare-list format once instead of keeping those surfaces away for good', async () => {
+    const storage = new MemoryStorage();
+    await storage.setItem('selwise_dismissed', JSON.stringify(['camp-1']));
+    const store = new DismissalStore(storage);
+    await store.hydrate();
+    expect(store.heldIds([surface()], NOW)).toEqual([]);
+    expect(await storage.getItem('selwise_dismissed')).toBeNull();
   });
 
   it('survives a corrupt stored value instead of failing every launch', async () => {
     const storage = new MemoryStorage();
     await storage.setItem('selwise_dismissed', '{not json');
-
     const store = new DismissalStore(storage);
     await store.hydrate();
-    expect(store.list()).toEqual([]);
+    expect(store.heldIds([surface()], NOW)).toEqual([]);
   });
 
   it('clears on request, for a merchant testing their own app', async () => {
     const storage = new MemoryStorage();
     const store = new DismissalStore(storage);
     await store.hydrate();
-    await store.dismiss('a');
+    await store.dismiss(surface({ rawPlacement: { afterClose: { days: 3 } } }), NOW);
     await store.clear();
-    expect(store.list()).toEqual([]);
-  });
-  it('forgets a session-scoped close when the session changes, and never persists it', async () => {
-    const storage = new MemoryStorage();
-    let session = 's1';
-    const store = new DismissalStore(storage, () => session);
-    await store.hydrate();
-    await store.dismiss('goal-bar', 'session');
-    await store.dismiss('popup');
-    expect(store.list().sort()).toEqual(['goal-bar', 'popup']);
-    expect(await storage.getItem('selwise_dismissed')).toBe(JSON.stringify(['popup']));
-
-    session = 's2';
-    expect(store.list()).toEqual(['popup']);
-    expect(store.has('goal-bar')).toBe(false);
+    expect(store.heldIds([surface({ rawPlacement: { afterClose: { days: 3 } } })], NOW)).toEqual([]);
+    expect(await storage.getItem('selwise_dismissed')).toBeNull();
   });
 });
 

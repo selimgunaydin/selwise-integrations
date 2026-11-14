@@ -39,16 +39,20 @@
     {# Adjust these three expressions to the project's context object. The names
        below are the PZ defaults; `orders/success.html` in some projects exposes
        `order` under a different name. #}
+    {# `order.currency` is an object ({value, label}) on Project Zero; an order
+       line has `price` and, when discounted, `discounted_price` — there is no
+       `unit_price`. #}
+    {% set selwise_currency = order.currency.value if (order.currency and order.currency.value) else order.currency %}
     var order = {
       orderId: {{ order.number|tojson|safe }},
       total: Number({{ order.amount|tojson|safe }}),
-      currency: {{ (order.currency|default('TRY'))|tojson|safe }},
+      currency: {{ (selwise_currency or 'TRY')|string|tojson|safe }},
       items: [
         {% for item in order.orderitem_set %}
         {
           productItemCode: {{ item.product.sku|tojson|safe }},
-          unitPrice: Number({{ item.unit_price|tojson|safe }}),
-          quantity: Number({{ (item.quantity|default(1))|tojson|safe }})
+          unitPrice: Number({{ (item.discounted_price or item.price or 0)|tojson|safe }}),
+          quantity: Number({{ (item.quantity or 1)|tojson|safe }})
         }{% if not loop.last %},{% endif %}
         {% endfor %}
       ]

@@ -678,6 +678,16 @@ await selwise.dismissSurface(surface);   // records `close`, remembers it
 selwise.resetDismissals();               // for a merchant testing their app
 ```
 
+A close is remembered for the campaign's "after it is closed" setting: for the
+current session by default, or for a number of days (kept across relaunches).
+Tapping the surface's own button stores nothing; how often it returns is the
+frequency cap's job. The surface comes back when its words or design change.
+Pass the whole `surface` object you were given, not just its id.
+
+> **Behaviour change.** Earlier versions remembered every close (except a goal
+> bar's) permanently. A close now lasts for the session unless the campaign
+> says otherwise, and the old permanent list is dropped on first launch.
+
 ### The brand theme
 
 Widget style DEFAULTS are literally `var(--selwise-brand, #1a1a1a)`, so a
@@ -808,7 +818,7 @@ still renders here.
 ```tsx
 import { useSelwiseSearch } from '@selwise/react-native/react';
 
-const { query, setQuery, hits, loading, isZeroResults, trackClick, clear } = useSelwiseSearch({
+const { query, setQuery, hits, loading, redirect, isZeroResults, trackClick, clear } = useSelwiseSearch({
   limit: 20,
 });
 ```
@@ -819,6 +829,11 @@ Behaviour in the dashboard, read once with `selwise.getSearchBehavior()` — so
 the app and the storefront search on the same keystrokes. Until it arrives, or
 if it cannot be read, the hook uses 2 characters and 250 ms. Pass either
 option to override the channel.
+
+`redirect` is the address the merchant set for the term you searched (for
+example "shipping" → the shipping page), or `null`. A redirected term returns
+no hits, so check `redirect` before drawing results: it is not a zero-result
+search and `isZeroResults` stays `false` for it.
 
 **Know what this searches:** the Selwise product feed, not the storefront's own
 product index. It therefore has **no facets and no sorters**. Keep the app's
@@ -1001,7 +1016,7 @@ everything behind it forever.
 | `recordSurfaceShown(surface)` | `Promise<void>` | Spends the frequency-cap allowance. Call when it draws. |
 | `trackSurfaceView(surface)` | `void` | `impression`, with the browser widget's entityType. |
 | `trackSurfaceClick(surface, metadata?)` | `void` | `click`. |
-| `dismissSurface(surface)` | `Promise<void>` | Records `close` and remembers it across launches. |
+| `dismissSurface(surface)` | `Promise<void>` | Records `close` and remembers it for the campaign's after-close setting (the session, or N days across launches). |
 | `resetDismissals()` | `Promise<void>` | Forgets every dismissal. |
 | `invalidateSurfaces()` | `void` | Drops the cached `/config` so the next call refetches. |
 | `setLocale(locale)` | `void` | The app's language changed: later reads answer in it; cached `/config` and enrichment are dropped. |
@@ -1030,7 +1045,7 @@ everything behind it forever.
 | `SelwiseProvider` | Puts a client on the context: `<SelwiseProvider client={selwise}>`. |
 | `useSelwise()` | The client from context. |
 | `useRecommendationWidget(widgetId, options?)` | `{ products, productCard, loading, error, followsCart, widget, experiment, reload, trackImpression, trackClick }` |
-| `useSelwiseSearch(options?)` | `{ query, setQuery, hits, loading, error, isZeroResults, trackClick, clear }` |
+| `useSelwiseSearch(options?)` | `{ query, setQuery, hits, loading, error, redirect, isZeroResults, trackClick, clear }` |
 
 ### Also exported
 

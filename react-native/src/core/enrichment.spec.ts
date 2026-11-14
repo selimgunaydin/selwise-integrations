@@ -1,6 +1,7 @@
 import {
   EnrichmentCache,
   itemsForSlot,
+  keepSlotWinners,
   normalizeEnrichment,
   normalizeEnrichmentItem,
   normalizePlacementKey,
@@ -139,7 +140,7 @@ describe('selectByTestMode', () => {
     ]);
   });
 
-  it('shows a tester only the test-mode rules', () => {
+  it('shows a tester only the test-mode rules, so a live one cannot win the slot', () => {
     expect(selectByTestMode([live, testing], true).map((i) => i.assignmentId)).toEqual([
       'rule-test',
     ]);
@@ -164,6 +165,55 @@ describe('itemsForSlot', () => {
   it('returns nothing for a slot with no rules, or an impossible name', () => {
     expect(itemsForSlot(items, 'pdp-nothing')).toEqual([]);
     expect(itemsForSlot(items, '???')).toEqual([]);
+  });
+});
+
+describe('conflictBehavior', () => {
+  it('is read off an exclusive rule and absent otherwise', () => {
+    expect(normalizeEnrichmentItem({ ...ITEM, conflictBehavior: 'exclusive' })?.conflictBehavior).toBe(
+      'exclusive'
+    );
+    expect(normalizeEnrichmentItem({ ...ITEM, conflictBehavior: 'stack' })).not.toHaveProperty(
+      'conflictBehavior'
+    );
+    expect(normalizeEnrichmentItem(ITEM)).not.toHaveProperty('conflictBehavior');
+  });
+});
+
+describe('keepSlotWinners', () => {
+  const rule = (assignmentId: string, order: number, extra: Record<string, unknown> = {}) =>
+    normalizeEnrichmentItem({ ...ITEM, assignmentId, order, ...extra }) as EnrichmentItem;
+  const ids = (items: EnrichmentItem[]) => items.map((item) => item.assignmentId);
+
+  it('keeps only an exclusive winner', () => {
+    const items = [rule('a', 0, { conflictBehavior: 'exclusive' }), rule('b', 1)];
+    expect(ids(keepSlotWinners(items))).toEqual(['a']);
+  });
+
+  it('keeps every rule when the winner stacks, whatever the ones below it are', () => {
+    const items = [rule('a', 0), rule('b', 1, { conflictBehavior: 'exclusive' })];
+    expect(ids(keepSlotWinners(items))).toEqual(['a', 'b']);
+  });
+
+  it('lets the rule after a targeted-out exclusive rule win', () => {
+    // The caller has already removed the exclusive rule the visitor is outside
+    // of, so the slot's winner is the next one, not an empty slot.
+    const afterTargeting = [rule('general', 1)];
+    expect(ids(keepSlotWinners(afterTargeting))).toEqual(['general']);
+  });
+
+  it('settles each slot on its own and keeps the original order', () => {
+    const items = [
+      rule('faq-low', 1, { placementKey: 'pdp-faq' }),
+      rule('specs-top', 0, { conflictBehavior: 'exclusive' }),
+      rule('faq-top', 0, { placementKey: 'pdp-faq', conflictBehavior: 'exclusive' }),
+      rule('specs-low', 1),
+    ];
+    expect(ids(keepSlotWinners(items))).toEqual(['specs-top', 'faq-top']);
+  });
+
+  it('answers an empty list with an empty list', () => {
+    expect(keepSlotWinners([])).toEqual([]);
   });
 });
 

@@ -22,6 +22,8 @@
  * product-keyed response serves every visitor.
  */
 
+import { resolveEnrichmentConflicts } from '../vendor/enrichment-conflicts.js';
+
 /** One rule, rendered. Mirrors `AppEnrichmentItem` in the shared contract. */
 export interface EnrichmentItem {
   assignmentId: string;
@@ -38,6 +40,12 @@ export interface EnrichmentItem {
   segmentTargetingMode?: string;
   segmentIds?: string[];
   isTestMode?: boolean;
+  /**
+   * `exclusive` when this rule, if it is the first one left in its slot after
+   * segment and test-mode targeting, keeps the slot's other rules off the
+   * screen. Absent means the rule stacks with the others.
+   */
+  conflictBehavior?: 'exclusive';
 }
 
 export interface EnrichmentResult {
@@ -134,6 +142,7 @@ export function normalizeEnrichmentItem(raw: unknown): EnrichmentItem | null {
         }
       : {}),
     ...(entry.isTestMode === true ? { isTestMode: true } : {}),
+    ...(entry.conflictBehavior === 'exclusive' ? { conflictBehavior: 'exclusive' as const } : {}),
   };
 }
 
@@ -160,12 +169,31 @@ export function normalizeEnrichment(raw: unknown): EnrichmentResult {
  * follow. A test-mode rule is invisible to a real visitor and the only thing a
  * tester sees, so getting it backwards puts a merchant's unfinished markup on
  * every product screen.
+ *
+ * A tester sees ONLY the test-mode rules, on purpose: one slot shows one rule,
+ * so a live rule left in the list could win the slot and hide the draft being
+ * tried. (The storefront's `?test=1` shows both because a page can hold many
+ * placements; a screen slot cannot.)
  */
 export function selectByTestMode(
   items: readonly EnrichmentItem[],
   testMode: boolean
 ): EnrichmentItem[] {
   return items.filter((item) => (item.isTestMode === true) === testMode);
+}
+
+/**
+ * Settle each slot among the rules this visitor can actually see.
+ *
+ * Call it AFTER segment and test-mode targeting. A slot's winner is the first
+ * rule left in stacking order whatever its behaviour; `exclusive` only decides
+ * whether the others come with it. Deciding the winner before targeting would
+ * let an `exclusive` rule that the visitor is outside of leave the slot empty.
+ * Items keep their original order. An app is always a phone, so a rule for the
+ * desktop never reaches this point.
+ */
+export function keepSlotWinners(items: readonly EnrichmentItem[]): EnrichmentItem[] {
+  return resolveEnrichmentConflicts(items, (item) => item.placementKey, 'mobile');
 }
 
 /** The rules for one slot, in stacking order. */
@@ -189,20 +217,24 @@ const MAX_CACHED_CODES = 20;
 export class EnrichmentCache {
   private readonly entries = new Map<string, EnrichmentResult>();
 
-  private keyOf(code: string, slots: readonly string[]): string {
-    return `${code} ${[...slots].sort().join(',')}`;
+  /**
+   * `scope` separates audiences that are shipped different item sets for the
+   * same product and slots (test mode shows drafts, live does not).
+   */
+  private keyOf(code: string, slots: readonly string[], scope = ''): string {
+    return `${scope}|${code} ${[...slots].sort().join(',')}`;
   }
 
-  get(code: string, slots: readonly string[], stamp: string): EnrichmentResult | null {
-    const entry = this.entries.get(this.keyOf(code, slots));
+  get(code: string, slots: readonly string[], stamp: string, scope = ''): EnrichmentResult | null {
+    const entry = this.entries.get(this.keyOf(code, slots, scope));
     if (!entry) return null;
     // An empty stamp means "nothing fetched yet", not "matches".
     if (!stamp || entry.v !== stamp) return null;
     return entry;
   }
 
-  set(code: string, slots: readonly string[], value: EnrichmentResult): void {
-    const key = this.keyOf(code, slots);
+  set(code: string, slots: readonly string[], value: EnrichmentResult, scope = ''): void {
+    const key = this.keyOf(code, slots, scope);
     // Re-insert so eviction order is least-recently-written.
     this.entries.delete(key);
     this.entries.set(key, value);

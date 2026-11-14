@@ -25,7 +25,13 @@ export interface UseSelwiseSearchResult {
   hits: SelwiseProduct[];
   loading: boolean;
   error: Error | null;
-  /** True once a search has run and returned nothing — drive the zero-results UI from this. */
+  /**
+   * The address the channel sends this search to (a redirect the merchant set
+   * for the term), or null. Check it before drawing results: a redirected term
+   * returns no hits, and it is not a zero-result search.
+   */
+  redirect: string | null;
+  /** True once a search has run and returned nothing — drive the zero-results UI from this. A redirected term is not one. */
   isZeroResults: boolean;
   /** Call on result tap. Required for search click-through reporting. */
   trackClick: (itemCode: string, position?: number) => void;
@@ -66,6 +72,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [redirect, setRedirect] = useState<string | null>(null);
 
   // Held in a ref so changing a filter does not re-create the debounce timer.
   const optionsRef = useRef(searchOptions);
@@ -76,6 +83,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
 
     if (trimmed.length < minChars) {
       setHits([]);
+      setRedirect(null);
       setLoading(false);
       setHasSearched(false);
       return undefined;
@@ -91,6 +99,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
         .then((result) => {
           if (!active) return;
           setHits(result.hits);
+          setRedirect(typeof result.redirect === 'string' && result.redirect ? result.redirect : null);
           setError(null);
           setHasSearched(true);
         })
@@ -98,6 +107,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
           if (!active || isAbortError(caught)) return;
           setError(caught instanceof Error ? caught : new Error(String(caught)));
           setHits([]);
+          setRedirect(null);
           setHasSearched(true);
         })
         .finally(() => {
@@ -122,6 +132,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
   const clear = useCallback(() => {
     setQuery('');
     setHits([]);
+    setRedirect(null);
     setError(null);
     setHasSearched(false);
   }, []);
@@ -132,7 +143,8 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
     hits,
     loading,
     error,
-    isZeroResults: hasSearched && !loading && hits.length === 0 && error === null,
+    redirect,
+    isZeroResults: hasSearched && !loading && hits.length === 0 && error === null && redirect === null,
     trackClick,
     clear,
   };

@@ -1,5 +1,6 @@
 import { EXPERIMENT_CLIENT_CAPABILITIES, type ExperimentAssignment } from '../core/eligibility.js';
 import { CONFIG_PROTOCOL_CURRENT } from '../vendor/dynamic-content.js';
+import { ENRICHMENT_CLIENT_CAPABILITIES } from '../vendor/enrichment-conflicts.js';
 import type { HttpClient } from '../transport/http.js';
 import type {
   OrderInput,
@@ -74,6 +75,9 @@ export class Endpoints {
         code,
         slots: slots.join(','),
         ...(options.testMode ? { test: '1' } : {}),
+        // Says this SDK settles each slot's winner itself, after its own
+        // targeting, so the response carries every rule that could still win.
+        capabilities: ENRICHMENT_CLIENT_CAPABILITIES.join(','),
       },
       signal,
     });
