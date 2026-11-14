@@ -1,6 +1,6 @@
 {
   "name": "@selwise/react-native",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Selwise SDK for React Native apps — recommendations, search, tracking and order attribution without a DOM.",
   "license": "MIT",
   "private": false,

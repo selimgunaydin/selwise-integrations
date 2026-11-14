@@ -89,7 +89,7 @@ import {
   type TrackOptions,
 } from './types.js';
 
-export const SDK_VERSION = '1.4.1';
+export const SDK_VERSION = '1.5.0';
 
 /** How many links opened before init() resolves are kept for it. */
 const PENDING_DEEP_LINKS_MAX = 5;
