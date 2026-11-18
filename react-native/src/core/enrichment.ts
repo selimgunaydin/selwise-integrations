@@ -23,6 +23,7 @@
  */
 
 import { resolveEnrichmentConflicts } from '../vendor/enrichment-conflicts.js';
+import { asRecord } from './records.js';
 
 /** One rule, rendered. Mirrors `AppEnrichmentItem` in the shared contract. */
 export interface EnrichmentItem {
@@ -68,12 +69,6 @@ export const EMPTY_ENRICHMENT: EnrichmentResult = {
 
 const PLACEMENT_KEY_MAX_LENGTH = 64;
 const PLACEMENT_KEY_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function asString(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;

@@ -174,6 +174,104 @@ describe('measuringPurchases', () => {
     expect(mapEvent('measuringPurchases', orderState, {}, {})[0].order.metadata).toBeUndefined();
   });
 
+  // An order records what was paid: one sku at two prices is two lines.
+  it('keeps a sku bought at two prices as two lines', () => {
+    const state = {
+      webCheckout: {
+        sucess: {
+          order: { order: { number: 'X-1', items: [{ sku: 'A', price: 80 }, { sku: 'A', price: 100 }, { sku: 'A', price: 80 }] } }
+        }
+      }
+    };
+    expect(mapEvent('measuringPurchases', state, {}, {})[0].order.items).toEqual([
+      { productItemCode: 'A', quantity: 2, unitPrice: 80 },
+      { productItemCode: 'A', quantity: 1, unitPrice: 100 }
+    ]);
+  });
+
+  it('carries each line`s list price when the order has one', () => {
+    const state = {
+      webCheckout: {
+        sucess: { order: { order: { number: 'X-2', items: [{ sku: 'A', price: 80, retail_price: '100.00' }, { sku: 'B', price: 50 }] } } }
+      }
+    };
+    expect(mapEvent('measuringPurchases', state, {}, {})[0].order.items).toEqual([
+      { productItemCode: 'A', quantity: 1, unitPrice: 80, originalPrice: 100 },
+      { productItemCode: 'B', quantity: 1, unitPrice: 50 }
+    ]);
+  });
+
+  it('sends the order`s own money lines, and none it does not carry', () => {
+    const rich = {
+      webCheckout: {
+        sucess: {
+          order: {
+            order: {
+              number: 'X-3',
+              amount: '119.90',
+              discount_amount: '20.00',
+              shipping_amount: '0.00',
+              tax_amount: '18',
+              items: [{ sku: 'A', price: 119.9 }]
+            }
+          }
+        }
+      }
+    };
+    const body = mapEvent('measuringPurchases', rich, {}, {})[0].order;
+    expect(body).toEqual(expect.objectContaining({ total: 119.9, discountTotal: 20, shippingTotal: 0, taxTotal: 18 }));
+    // A free shipping line is a reported zero; an absent subtotal is not one.
+    expect(body).not.toHaveProperty('subtotal');
+
+    const bare = mapEvent('measuringPurchases', orderState, {}, {})[0].order;
+    for (const key of ['subtotal', 'discountTotal', 'shippingTotal', 'taxTotal', 'marketingConsent']) {
+      expect(bare).not.toHaveProperty(key);
+    }
+  });
+
+  describe('marketing consent at checkout', () => {
+    const withOrder = (extra) => ({
+      webCheckout: {
+        sucess: {
+          order: {
+            order: {
+              number: 'X-4',
+              items: [{ sku: 'A', price: 1 }],
+              user_email: 'ayse@example.com',
+              shipping_address: { phone_number: '+905321112233' },
+              ...extra
+            }
+          }
+        }
+      }
+    });
+
+    it('records an explicit tick, with the address or number it is for', () => {
+      const [order] = mapEvent('measuringPurchases', withOrder({ email_allowed: true, sms_allowed: true }), {}, {});
+      expect(order.order.marketingConsent).toEqual([
+        { kind: 'email', value: 'ayse@example.com', optIn: true, note: expect.any(String) },
+        { kind: 'phone', value: '+905321112233', optIn: true, note: expect.any(String) }
+      ]);
+    });
+
+    it('records nothing for a box that is absent or unticked — never an opt-out', () => {
+      expect(mapEvent('measuringPurchases', withOrder({}), {}, {})[0].order).not.toHaveProperty('marketingConsent');
+      expect(mapEvent('measuringPurchases', withOrder({ email_allowed: false, sms_allowed: false }), {}, {})[0].order).not.toHaveProperty(
+        'marketingConsent'
+      );
+    });
+
+    it('does not read the account`s stored preference as a checkout decision', () => {
+      const state = { ...withOrder({}), auth: { auth: { user: { pk: 9, email_allowed: true } } } };
+      expect(mapEvent('measuringPurchases', state, {}, {})[0].order).not.toHaveProperty('marketingConsent');
+    });
+
+    it('needs the address to record the email decision', () => {
+      const state = withOrder({ email_allowed: true, user_email: '' });
+      expect(mapEvent('measuringPurchases', state, {}, {})[0].order).not.toHaveProperty('marketingConsent');
+    });
+  });
+
   it('emits nothing when checkout carries no order', () => {
     expect(mapEvent('measuringPurchases', { webCheckout: {} }, {}, {})).toEqual([]);
   });
@@ -191,7 +289,16 @@ describe('productsImpressions', () => {
       pagination: { total_count: 163 }
     });
     expect(event.name).toBe('search_query');
-    expect(event.metadata).toEqual({ query: 'ruj', resultCount: 163 });
+    expect(event.metadata).toEqual({ query: 'ruj', resultsCount: 163 });
+  });
+
+  it('logs a search that came back empty as a zero-result search', () => {
+    const [event] = mapEvent('productsImpressions', {}, {}, {
+      search_text: 'xyzzy',
+      pagination: { total_count: 0 }
+    });
+    expect(event.name).toBe('search_zero_results');
+    expect(event.metadata).toEqual({ query: 'xyzzy', resultsCount: 0 });
   });
 
   it('ignores a plain category listing', () => {

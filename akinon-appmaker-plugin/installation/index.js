@@ -10,13 +10,11 @@
  */
 module.exports = {
   dependencies: {
-    // The SDK this plugin is written against: `setCart`, `resolveGoalBar`,
-    // `countdownTarget` and, since 0.10.0, `RecommendationWidgetLoader` (strips
-    // that follow the basket). Each degrades on an older SDK, but an install
-    // should get this one. It was still pinned to 0.7.0, which has none of
-    // them. Keep in step with `packages/react-native/package.json`. 1.2.0
-    // adds `setAppState`, which the Live View's app heartbeat needs; 1.4.0
-    // `trackDeepLink`, which credits a push or an e-mail that opens the app.
-    '@selwise/react-native': '1.4.0'
+    // The SDK this plugin is written against. Its client holds the screen, the
+    // product, the basket, the language and the consent answer this plugin feeds
+    // it, and `@selwise/react-native/ui` (2.0.0) draws campaigns, strips, search
+    // and enrichment with this plugin as the host. An older SDK has neither.
+    // Keep in step with `packages/react-native/package.json`.
+    '@selwise/react-native': '2.0.0'
   }
 };

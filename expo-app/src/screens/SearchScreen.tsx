@@ -1,54 +1,26 @@
 import { useEffect } from 'react';
-import { FlatList, Text, TextInput, View } from 'react-native';
-import { useSelwiseSearch } from '@selwise/react-native/react';
+import { View } from 'react-native';
+import { SelwiseSearchPanel, SelwiseSlot } from '@selwise/react-native/ui';
 import { selwise } from '../selwise';
-import { useStore } from '../store';
-import { ProductCard, styles } from '../ui';
+import { useNavigation } from '../navigation';
 
 /**
- * Instant search over the Selwise product feed. `minChars` and the debounce
- * follow the channel's own setting (Search → Configuration → Behaviour), so
- * the app and the storefront search on the same keystrokes. `trackClick` is
- * what puts the query into click-through reporting.
+ * Search is the panel's own screen: the box, suggestions, recent searches,
+ * results, filters and "did you mean" are what the merchant configured in the
+ * dashboard (Search), drawn natively. Searches, clicks and adds are reported by
+ * the panel; the app only says what a tap on a result does.
  */
 export function SearchScreen() {
-  const { setOpen } = useStore();
-  const { query, setQuery, hits, loading, isZeroResults, trackClick } = useSelwiseSearch({ limit: 20 });
+  const { openProduct } = useNavigation();
 
   useEffect(() => {
     selwise.trackScreenView('app://search');
   }, []);
 
   return (
-    <View style={{ flex: 1, padding: 16, gap: 12 }}>
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Ürün ara: keten, sneaker, mum…"
-        style={styles.input}
-        autoCorrect={false}
-        returnKeyType="search"
-        accessibilityLabel="Ürün ara"
-      />
-      {loading ? <Text style={styles.muted}>Aranıyor…</Text> : null}
-      {isZeroResults ? <Text style={styles.muted}>“{query}” için sonuç yok.</Text> : null}
-      <FlatList
-        data={hits}
-        numColumns={2}
-        keyExtractor={(p) => p.itemCode}
-        columnWrapperStyle={{ gap: 12 }}
-        contentContainerStyle={{ gap: 16, paddingBottom: 24 }}
-        renderItem={({ item, index }) => (
-          <ProductCard
-            product={item}
-            width={160}
-            onPress={() => {
-              trackClick(item.itemCode, index);
-              setOpen(item);
-            }}
-          />
-        )}
-      />
+    <View style={{ flex: 1 }}>
+      <SelwiseSearchPanel autoFocus={false} onProductPress={openProduct} style={{ flex: 1 }} />
+      <SelwiseSlot screen="app://search" slot="search-bottom" onProductPress={openProduct} />
     </View>
   );
 }

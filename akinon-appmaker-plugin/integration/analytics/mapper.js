@@ -1,5 +1,7 @@
 'use strict';
 
+const { consumeSurfaceAdd } = require('../surface-add.js');
+
 const { screenUrl } = require('../screens.js');
 
 /**
@@ -79,6 +81,113 @@ function foldLines(items) {
   return [...bySku.values()];
 }
 
+/** The first of these keys that holds a number on `source`, as a number; null when none does. */
+function firstNum(source, keys) {
+  if (!source) return null;
+  for (const key of keys) {
+    const parsed = num(source[key]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+/**
+ * The lines of a PLACED order.
+ *
+ * Unlike a basket (`foldLines`, one line per sku, because the cart diff asks
+ * "how many of this sku"), an order is a record of what was paid: the same sku
+ * bought at two prices (a campaign line and a full-price one) is two lines, and
+ * folding them under the first price misstated the revenue of both. Lines fold
+ * only when sku AND unit price agree.
+ *
+ * `originalPrice` is the line's LIST price (Akinon's `retail_price`), kept only
+ * when the order carries one — the price and discount reports compare what was
+ * paid with what the product lists for.
+ */
+function orderLines(items) {
+  if (!Array.isArray(items)) return [];
+  const byKey = new Map();
+
+  for (const item of items) {
+    const sku = str(item && item.sku).trim();
+    if (!sku) continue;
+
+    const quantity = num(item.quantity) || 1;
+    const unitPrice = num(item.price) !== null ? num(item.price) : lineUnitPrice(item, quantity);
+    const originalPrice = firstNum(item, ['retail_price', 'retailPrice', 'originalPrice']);
+    const key = sku + '|' + (unitPrice === null ? '' : unitPrice) + '|' + (originalPrice === null ? '' : originalPrice);
+
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.quantity += quantity;
+      continue;
+    }
+    byKey.set(key, {
+      productItemCode: sku,
+      quantity,
+      ...(unitPrice !== null ? { unitPrice } : {}),
+      ...(originalPrice !== null && originalPrice > 0 ? { originalPrice } : {}),
+      ...(str(item.name) ? { name: str(item.name) } : {})
+    });
+  }
+
+  return [...byKey.values()];
+}
+
+/**
+ * The order's own money lines, when the order carries them under the names
+ * Akinon uses (`discount_amount`, `shipping_amount`) or the camelCase the app's
+ * redux layer re-spells them as. Absent stays absent: a missing discount is
+ * "not reported", and sending 0 for it would read as "paid full price".
+ */
+function orderTotals(order) {
+  const totals = {};
+  const subtotal = firstNum(order, ['subtotal', 'total_product_amount', 'totalProductAmount']);
+  const discountTotal = firstNum(order, ['discount_amount', 'discountAmount', 'total_discount_amount', 'totalDiscountAmount']);
+  const shippingTotal = firstNum(order, ['shipping_amount', 'shippingAmount']);
+  const taxTotal = firstNum(order, ['tax_amount', 'taxAmount', 'tax_total', 'taxTotal']);
+  if (subtotal !== null) totals.subtotal = subtotal;
+  if (discountTotal !== null) totals.discountTotal = discountTotal;
+  if (shippingTotal !== null) totals.shippingTotal = shippingTotal;
+  if (taxTotal !== null) totals.taxTotal = taxTotal;
+  return totals;
+}
+
+function truthyFlag(value) {
+  return value === true || value === 1 || str(value).toLowerCase() === 'true';
+}
+
+/**
+ * A marketing opt-in the shopper gave AT checkout.
+ *
+ * Only an explicit tick on the order itself counts (`email_allowed` /
+ * `sms_allowed` on the order, or `emailAllowed` / `smsAllowed`). The account's
+ * own stored preference is not a checkout decision and is never read here, and a
+ * box that is absent or unticked records nothing — in particular it is never
+ * sent as an opt-OUT, which would unsubscribe somebody who agreed elsewhere.
+ * The address and the number come from the order itself: that is the only door
+ * an order has for them (the order route has no customer e-mail or phone field).
+ */
+function orderMarketingConsent(order) {
+  const entries = [];
+  const email = str(order.user_email || order.userEmail || order.email).trim();
+  const shipping = order.shipping_address || order.shippingAddress || {};
+  const billing = order.billing_address || order.billingAddress || {};
+  const phone = str(
+    order.phone_number || order.phoneNumber || shipping.phone_number || shipping.phoneNumber || billing.phone_number || billing.phoneNumber
+  ).trim();
+
+  if (email && truthyFlag(order.email_allowed !== undefined ? order.email_allowed : order.emailAllowed)) {
+    entries.push({ kind: 'email', value: email, optIn: true, note: CHECKOUT_CONSENT_NOTE });
+  }
+  if (phone && truthyFlag(order.sms_allowed !== undefined ? order.sms_allowed : order.smsAllowed)) {
+    entries.push({ kind: 'phone', value: phone, optIn: true, note: CHECKOUT_CONSENT_NOTE });
+  }
+  return entries;
+}
+
+const CHECKOUT_CONSENT_NOTE = 'Akinon App Maker checkout opt-in';
+
 function lineUnitPrice(item, quantity) {
   const total = num(item && item.totalAmount);
   if (total === null) return null;
@@ -92,10 +201,13 @@ function lineUnitPrice(item, quantity) {
  * for every route including ones we do not map, so it is also what keeps
  * `pageUrl` correct for the events that follow it.
  */
-function navigationChange(state, prevState, data) {
+function navigationChange(state, prevState, data, options) {
   const currentPage = (data && data.currentPage) || (state && state.app && state.app.currentPage);
   if (!currentPage) return [];
-  return [{ kind: KIND.SCREEN, pageUrl: screenUrl(currentPage), screenName: str(currentPage) }];
+  // The app's `screenRoutes` name its own routes for a Selwise address, so a route
+  // registered for `app://search` under any name is that screen here too.
+  const screenRoutes = options && options.screenRoutes;
+  return [{ kind: KIND.SCREEN, pageUrl: screenUrl(currentPage, screenRoutes), screenName: str(currentPage) }];
 }
 
 function productImpression(state) {
@@ -135,6 +247,9 @@ function cartChanges(state, prevState) {
   if (total === previousTotal) return [];
 
   const added = total > previousTotal;
+  // An add a Selwise surface made is written ONCE — here, with the line's sku —
+  // and carries the surface's attribution (`surface-add.js`).
+  const attribution = added ? consumeSurfaceAdd() : null;
   const lines = foldLines(basket.products);
   const changed = diffLine(lines, foldLines(previous.products), added);
 
@@ -150,6 +265,11 @@ function cartChanges(state, prevState) {
     entityType: 'product',
     metadata
   };
+
+  if (attribution) {
+    event.metadata.source = attribution.source;
+    event.metadata.surfaceId = attribution.surfaceId;
+  }
 
   if (changed) {
     event.productItemCode = changed.productItemCode;
@@ -658,7 +778,7 @@ function measuringPurchases(state, prevState) {
   if (!order) return [];
 
   const orderId = str(order.number || order.orderNumber || order.pk).trim();
-  const items = foldLines(order.items);
+  const items = orderLines(order.items);
   if (!orderId || items.length === 0) return [];
 
   const total = num(order.amount) !== null ? num(order.amount) : num(order.total_amount);
@@ -666,6 +786,7 @@ function measuringPurchases(state, prevState) {
   // previous state; the order body names it under several spellings.
   const previousBasket = (prevState && prevState.basket && prevState.basket.basket) || {};
   const coupon = voucherOf(order, previousBasket, false);
+  const consent = orderMarketingConsent(order);
 
   return [
     {
@@ -677,6 +798,8 @@ function measuringPurchases(state, prevState) {
         // dropped by the unvalidated order route.
         ...(total !== null ? { total } : {}),
         ...(str(order.currency) ? { currency: str(order.currency).toUpperCase() } : {}),
+        ...orderTotals(order),
+        ...(consent.length > 0 ? { marketingConsent: consent } : {}),
         // `couponCode` is the key the coupon segment signals read
         // (apps/api segments/discount-signals.ts).
         ...(coupon ? { metadata: { couponCode: coupon.slice(0, 100) } } : {})
@@ -702,12 +825,17 @@ function productsImpressions(state, prevState, action) {
       // in CANONICAL_EVENTS (packages/tracking-contract); `search` is a
       // CATEGORY there, not an event, so the row was dropped and the search
       // panels stayed empty while the app was reporting every search.
-      name: 'search_query',
+      //
+      // A list that came back EMPTY is `search_zero_results` — the event the
+      // zero-results report reads, and the one `SDK.search()` sends for the same
+      // case. Both carry the count as `resultsCount`, the key the search report
+      // and the API's search log read.
+      name: total === 0 ? 'search_zero_results' : 'search_query',
       entityType: 'search',
       entityId: searchText,
       metadata: {
         query: searchText,
-        ...(total !== null ? { resultCount: total } : {})
+        ...(total !== null ? { resultsCount: total } : {})
       }
     }
   ];
@@ -827,15 +955,15 @@ const MAPPERS = {
 /** Every App Maker event this plugin subscribes to. */
 const HANDLED_EVENTS = Object.keys(MAPPERS);
 
-function mapEvent(eventName, state, prevState, data) {
+function mapEvent(eventName, state, prevState, data, options) {
   const mapper = MAPPERS[eventName];
   if (!mapper) return [];
   try {
-    return mapper(state, prevState, data) || [];
+    return mapper(state, prevState, data, options) || [];
   } catch (error) {
     // A malformed state must never take a merchant's screen down with it.
     return [{ kind: 'error', eventName, message: (error && error.message) || 'mapping failed' }];
   }
 }
 
-module.exports = { KIND, HANDLED_EVENTS, MAPPERS, mapEvent, foldLines, diffLine, userIdOf };
+module.exports = { KIND, HANDLED_EVENTS, MAPPERS, mapEvent, foldLines, orderLines, diffLine, userIdOf };

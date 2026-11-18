@@ -7,6 +7,9 @@ module.exports = {
   // under Node's native ESM as well as Metro. TypeScript maps `./x.js` back to
   // `./x.ts`; Jest's resolver does not, so it is mapped here.
   moduleNameMapper: {
+    // The components import `react-native`; a spec draws them against a light
+    // stand-in (`src/ui/test/react-native.mock.ts`), not the real library.
+    '^react-native$': '<rootDir>/src/ui/test/react-native.mock.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transform: {

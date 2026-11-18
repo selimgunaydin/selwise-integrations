@@ -14,6 +14,8 @@
  * app decides HOW.
  */
 
+import { asRecord } from './records.js';
+
 export interface ScenarioInboxEntry {
   deliveryId: string;
   scenarioId: string;
@@ -46,12 +48,6 @@ export type ScenarioInboxOutcome =
 export interface ScenarioInboxAcknowledgement {
   deliveryId: string;
   outcome: ScenarioInboxOutcome | string;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function asStringMap(value: unknown): Record<string, string> {

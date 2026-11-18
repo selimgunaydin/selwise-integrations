@@ -15,12 +15,12 @@ export interface RequestOptions {
   /** Path below `/public/sites/:siteKey`, e.g. `/recommendations`. */
   path: string;
   method?: 'GET' | 'POST';
-  query?: Record<string, string | number | boolean | undefined>;
+  /** An array repeats the key (`forceVariant=a&forceVariant=b`). */
+  query?: Record<string, string | number | boolean | string[] | undefined>;
   body?: unknown;
   /**
    * Omit `x-selwise-api-key`. Only for the ungated analytics endpoints
-   * (`events/batch`, `recommendations/track/*`, `search/log|click|zero-results`),
-   * which run without `PublicSiteGuard`.
+   * (`events/batch`, `recommendations/track/*`), which run without `PublicSiteGuard`.
    */
   unauthenticated?: boolean;
   /**
@@ -95,7 +95,9 @@ export class HttpClient {
       const parts: string[] = [];
       for (const [key, value] of Object.entries(query)) {
         if (value === undefined || value === null || value === '') continue;
-        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+        for (const single of Array.isArray(value) ? value : [value]) {
+          parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(single))}`);
+        }
       }
       if (parts.length > 0) {
         url += `?${parts.join('&')}`;

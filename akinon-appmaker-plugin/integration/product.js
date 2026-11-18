@@ -53,7 +53,9 @@ function productFacts(state) {
   const product = detail.product;
   if (!product || typeof product !== 'object' || !str(product.sku)) return null;
 
-  const facts = {};
+  // The code the catalogue and `trackProductView` know the product by: what the
+  // social-proof counters ask the API about.
+  const facts = { itemCode: str(product.sku) };
   if (str(product.name)) facts.title = str(product.name);
   if (num(product.price) !== null) facts.price = num(product.price);
   if (num(product.retailPrice) !== null) facts.originalPrice = num(product.retailPrice);

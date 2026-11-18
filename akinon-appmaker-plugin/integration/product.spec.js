@@ -26,6 +26,8 @@ function fetchedDetail(overrides, detailOverrides) {
 describe('productFacts', () => {
   it('reads the product a fetched detail shows', () => {
     expect(productFacts(fetchedDetail())).toEqual({
+      // The catalogue code the social-proof counters ask the API about.
+      itemCode: 'KM1',
       title: 'Kırmızı ruj',
       price: 899,
       originalPrice: 1200,
@@ -48,6 +50,7 @@ describe('productFacts', () => {
 
   it('leaves out what the app does not know rather than guessing', () => {
     expect(productFacts(fetchedDetail({ retailPrice: undefined, stock: null, currency: '' }))).toEqual({
+      itemCode: 'KM1',
       title: 'Kırmızı ruj',
       price: 899,
     });

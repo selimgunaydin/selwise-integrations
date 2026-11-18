@@ -1,17 +1,13 @@
 {
   "channelKey": "sk_xxxxxxxxxxxxxxxxxxxxxxxx",
   "apiKey": "swpk_live_xxxxxxxxxxxxxxxxxxxxxxxx",
-  "apiUrl": "https://api.selwise.com",
   "debug": false,
+  "testMode": false,
+  "qaLinks": false,
   "analytics": {
     "active": true
   },
   "recommendation": {
-    "active": true,
-    "placements": {
-      "app://home": ["Ana Sayfa — Çok Satanlar", "Ana Sayfa — Yeni Gelenler"],
-      "app://product": ["PDP — Benzer Ürünler", "PDP — Birlikte Alınanlar"],
-      "app://basket": ["Sepet — Tamamlayıcı Ürünler"]
-    }
+    "active": true
   }
 }

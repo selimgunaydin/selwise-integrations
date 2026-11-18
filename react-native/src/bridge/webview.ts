@@ -1,5 +1,6 @@
 import type { Selwise } from '../client.js';
 import type { EntityType, TrackOptions } from '../types.js';
+import { isRecord } from '../core/records.js';
 
 /**
  * Bridge for storefront content rendered inside the app's WebView.
@@ -215,20 +216,20 @@ interface ExtractedEcommerce {
  *  - UA/EE: `ecommerce.<action>.products[]` with `id`, plus `actionField`
  */
 function extractEcommerce(message: Record<string, unknown>): ExtractedEcommerce {
-  const ecommerce = asRecord(message['ecommerce']) ?? {};
+  const ecommerce = recordOrUndefined(message['ecommerce']) ?? {};
 
   const rawItems =
     asArray(ecommerce['items']) ??
-    asArray(asRecord(ecommerce['purchase'])?.['products']) ??
-    asArray(asRecord(ecommerce['add'])?.['products']) ??
-    asArray(asRecord(ecommerce['remove'])?.['products']) ??
-    asArray(asRecord(ecommerce['detail'])?.['products']) ??
-    asArray(asRecord(ecommerce['checkout'])?.['products']) ??
-    asArray(asRecord(ecommerce['click'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['purchase'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['add'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['remove'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['detail'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['checkout'])?.['products']) ??
+    asArray(recordOrUndefined(ecommerce['click'])?.['products']) ??
     asArray(ecommerce['impressions']) ??
     [];
 
-  const purchaseActionField = asRecord(asRecord(ecommerce['purchase'])?.['actionField']);
+  const purchaseActionField = recordOrUndefined(recordOrUndefined(ecommerce['purchase'])?.['actionField']);
 
   return {
     items: rawItems.map(toExtractedItem).filter((item) => Object.keys(item).length > 0),
@@ -251,7 +252,7 @@ function extractEcommerce(message: Record<string, unknown>): ExtractedEcommerce 
 }
 
 function toExtractedItem(value: unknown): ExtractedItem {
-  const record = asRecord(value);
+  const record = recordOrUndefined(value);
   if (!record) return {};
 
   const item: ExtractedItem = {};
@@ -324,10 +325,8 @@ const ENTITY_TYPE_BY_EVENT: Record<string, EntityType> = {
   search_query: 'search',
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
 }
 
 function asArray(value: unknown): unknown[] | undefined {

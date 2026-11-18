@@ -1,4 +1,5 @@
-import { deepMerge, isRecord, type ExperimentAssignment, type ExperimentGate } from './eligibility.js';
+import { deepMerge, type ExperimentAssignment, type ExperimentGate } from './eligibility.js';
+import { isRecord } from './records.js';
 import type { RecommendationWidgetSummary, ResolvedRecommendationWidget } from '../types.js';
 
 /**

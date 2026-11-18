@@ -1476,6 +1476,34 @@ describe('product enrichment', () => {
     expect(calls.filter((call) => call.url.includes('/app/enrichments'))).toHaveLength(0);
   });
 
+  // A slot that draws nothing says why, where `explain()` can read it: this used to be
+  // silent, and a merchant whose block was missing had nothing to look at.
+  it('records why a slot is empty, by slot', async () => {
+    installEnrichment({ keys: [] });
+    const client = await init();
+    await client.getSurfaces('app://product');
+    client.setScreen('app://product');
+
+    await client.getEnrichment('KM1', ['pdp-specs']);
+
+    expect(client.explain('pdp-specs')).toEqual([
+      expect.objectContaining({ id: 'pdp-specs', kind: 'enrichment', reason: 'unknown_slot' }),
+    ]);
+  });
+
+  it('clears the record once the slot has something to draw', async () => {
+    installEnrichment();
+    const client = await init();
+    await client.getSurfaces('app://product');
+    client.setScreen('app://product');
+
+    client.noteEnrichment('pdp-specs', 'no_height');
+    expect(client.explain('pdp-specs')).toHaveLength(1);
+
+    await client.getEnrichment('KM1', ['pdp-specs']);
+    expect(client.explain('pdp-specs')).toEqual([]);
+  });
+
   // A product screen re-mounts constantly — a back navigation, a variant
   // switch, a tab change — and the answer for one product does not change.
   it('serves a second look at the same product from cache', async () => {

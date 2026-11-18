@@ -16,7 +16,51 @@ export const STORAGE_KEYS = {
   FREQUENCY_CAPS: 'selwise_frequency_caps',
   /** `goal_reached` already sent this session — the same key the browser widget uses. */
   GOAL_REACHED: 'selwise_goal_reached',
+  /** The visits this install has had and the current session's counters (`core/visitor-signals.ts`). */
+  VISITS: 'selwise_visits',
+  /**
+   * The push token the host registered (`registerPushToken`), so a later
+   * withdrawal of consent can revoke it before the host registers again.
+   * `{ token, provider, platform, withheld? }`.
+   */
+  PUSH_DEVICE: 'selwise_push_device',
 } as const;
+
+/**
+ * What each device key IS, decided once — the SDK's counterpart of the widget's
+ * `IDENTITY_KEYS` / `check-storage-keys.js` (that guardrail scans the browser
+ * widget only, so this list is held by `storage.spec.ts` instead: a key added to
+ * `STORAGE_KEYS` without a class fails it).
+ *
+ *  - `identity`  — names the visitor or their session (ids, the queued events).
+ *    The app manages consent (`source: 'app_managed'`), and with `consent:
+ *    { granted: false }` nothing is SENT, but these keys are the install's own.
+ *  - `behaviour` — describes what the visitor did (visit counts, session
+ *    counters). Written to the device ONLY while the visitor's answer allows
+ *    analytics (`VisitorSignals`' `persistAllowed`); before that it lives in
+ *    memory. A new behaviour key must be gated the same way.
+ *  - `decision`  — the consent answer itself: it has to exist before consent.
+ *  - `device-state` — a record of what this device did with a surface or the
+ *    channel's policy, carrying no visitor id.
+ */
+export type StorageKeyClass = 'identity' | 'behaviour' | 'decision' | 'device-state';
+
+export const STORAGE_KEY_CLASS: Readonly<Record<(typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS], StorageKeyClass>> = {
+  selwise_vid: 'identity',
+  selwise_session: 'identity',
+  selwise_suid: 'identity',
+  selwise_queue: 'identity',
+  selwise_consent: 'decision',
+  selwise_consent_policy: 'device-state',
+  selwise_dismissed: 'device-state',
+  selwise_frequency_caps: 'device-state',
+  selwise_goal_reached: 'device-state',
+  selwise_visits: 'behaviour',
+  // The address the host's own push library already holds, kept only to be
+  // able to revoke it; it carries no visitor id and is written only once the
+  // person's answer allowed registering it (`pushDevice` is marketing).
+  selwise_push_device: 'device-state',
+};
 
 /**
  * Last-resort storage when the host app passes none.

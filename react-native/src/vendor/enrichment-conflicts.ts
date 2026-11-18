@@ -110,6 +110,25 @@ export function webEnrichmentScope(item: { selector: string; insertPosition: str
 }
 
 /**
+ * The scope of a rule for whoever is looking at it: a rule with a selector
+ * competes on the page by (selector, position); a rule WITHOUT one — an app
+ * channel's, which stores an empty selector and is placed by name — competes in
+ * its placement key. Two app rules in different slots share an empty selector,
+ * so reading the web scope for them would put them against each other (and let an
+ * `exclusive` one wipe an unrelated slot). One spelling for the dashboard's
+ * previews and the cross-channel readers; the widget keeps `webEnrichmentScope`
+ * and the SDK its own key.
+ */
+export function enrichmentScopeOf(item: {
+  selector?: string | null;
+  insertPosition: string;
+  placementKey?: string | null;
+}): string {
+  if (!item.selector && item.placementKey) return `key:${item.placementKey}`;
+  return webEnrichmentScope({ selector: item.selector ?? '', insertPosition: item.insertPosition });
+}
+
+/**
  * `keepEnrichmentWinners` over every scope of a response, for a viewer whose
  * device is known. Items keep their relative order; the caller has already
  * applied its segment and test-mode gates.

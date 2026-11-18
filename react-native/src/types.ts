@@ -3,9 +3,9 @@
  *
  * Everything here is DOM-free on purpose: this package runs in Hermes/JSC where
  * `window`, `document` and `localStorage` do not exist. The browser widget
- * (`@selwise/widget`) is not usable in a native app — the Akinon Appmaker apps
- * render their own screens, so this SDK delivers *data* and leaves rendering to
- * the app's existing themed components.
+ * (`@selwise/widget`) is not usable in a native app, so this SDK delivers *data*
+ * and the components that draw it live in `@selwise/react-native/ui`, which an
+ * app that draws everything itself never imports.
  */
 
 /** Minimal async key/value contract. `@react-native-async-storage/async-storage` satisfies it as-is. */
@@ -82,7 +82,12 @@ export interface SelwiseInitOptions {
   timeoutMs?: number;
   /** Max events kept while offline. Default 500; oldest are dropped first. */
   maxQueueSize?: number;
-  /** Print SDK diagnostics with `console.log`. Default false. */
+  /**
+   * Print SDK diagnostics with `console.log`, and draw the on-device diagnostics
+   * button (`<SelwiseSurfaces />` mounts a small "S" at the bottom-left that
+   * opens a sheet: the screen, what was drawn, and why the rest was not). Default
+   * false. For a development or internal build only — never a release.
+   */
   debug?: boolean;
   /**
    * Show only test-mode campaigns and widgets, and nothing else.
@@ -109,6 +114,36 @@ export interface SelwiseInitOptions {
   clientPlatform?: string;
   /** Reported as `x-selwise-client-version`. Default the SDK version. */
   clientVersion?: string;
+  /**
+   * The wrapper around this SDK, when there is one (`'1.0.0'` for the App Maker
+   * plugin). Shown to the merchant next to the SDK version, so "which plugin is
+   * this app running" is a glance and not a support question.
+   */
+  pluginVersion?: string;
+  /** The app's own release (`'3.4.1'`), shown beside the SDK version. A segment can target it (`appVersion lt 3.5`). */
+  appVersion?: string;
+  /**
+   * The OS the app runs on (`Platform.OS` — the SDK itself imports nothing from
+   * `react-native`). Lets a segment target `ios` or `android`; without it, a
+   * live request does not carry the OS (the audience still reads it from the
+   * device's network stack).
+   */
+  platform?: 'ios' | 'android';
+  /**
+   * Tell the dashboard which screens and named points this app has shown
+   * (`app://product`, `pdp-under-info`) and which SDK it runs. Nothing about a
+   * shopper is sent. Default `true`; `false` keeps the dashboard's integration
+   * view empty for this app.
+   */
+  reportIntegration?: boolean;
+  /**
+   * Honour a QA link — `?selwise_test=1` and `?selwise_variant=<experimentId>:<variantId>`
+   * in a link that opens the app — for this app session: test mode on, and the
+   * chosen experiment arms forced. Default `false`; turn it on in a development
+   * or internal build only. A link can be sent by anybody, and test mode hides
+   * every live campaign.
+   */
+  qaLinks?: boolean;
 }
 
 /**
@@ -169,12 +204,16 @@ export interface SelwiseProduct {
   reviewCount?: number | null;
   isNew?: boolean;
   isBestseller?: boolean;
+  /** The code the app's basket accepts, when it differs from `itemCode` (`cart_code` in the catalogue). */
+  cartCode?: string | null;
   inStock?: boolean;
   stock?: number | null;
   sku?: string | null;
   productType?: string | null;
   categoryHierarchy?: string | null;
   explainability?: Record<string, unknown> | null;
+  /** The matched part of the title, with `<mark>` around it, when the search engine marks it. */
+  highlights?: { title?: string[] } | null;
   /**
    * `complementary` strips only: the approved role pair that put the
    * product here — group by `role` for a tab per role, caption with
@@ -184,8 +223,43 @@ export interface SelwiseProduct {
     role: string;
     relation: string;
     label: { tr: string; en: string };
+    /** The body slot the role sits in (`top`, `bottom`, `footwear`, …); null for a role with none. */
+    slot?: string | null;
+    /** The slot's name in both panel languages — a look's caption when the merchant picks "slot". */
+    slotLabel?: { tr: string; en: string } | null;
   } | null;
+  /** The product's siblings (its colour shades share a group code); never an identity. */
+  groupCode?: string | null;
+  /** The photo a card can show instead of the first — absent when the feed has one image per row. */
+  secondaryImageUrl?: string | null;
+  /**
+   * The product's colour siblings, for a card's shade row. Absent for a product
+   * with a single shade. One feed row is one product: a shade has its own
+   * product page (`url`) and item code.
+   */
+  swatches?: SelwiseProductSwatch[] | null;
+  /**
+   * The buyable options (sizes), each with the code the basket takes. Absent
+   * for a product with none; a card asks for one before it adds a product that has several.
+   */
+  variants?: SelwiseProductVariant[] | null;
+  hasVariants?: boolean;
+  /** The feed's custom attributes, read by a card node bound to `attr.<key>`. */
+  attributes?: Record<string, unknown> | null;
 }
+
+/** One shade of a product's colour row. */
+export interface SelwiseProductSwatch {
+  itemCode?: string;
+  /** The shade's name as the feed writes it. */
+  color?: string;
+  imageUrl?: string;
+  /** The shade's own product page. */
+  url?: string;
+}
+
+/** One buyable option of a product: a size, a shade, with the code the basket accepts. */
+export type SelwiseProductVariant = import('./vendor/product-card-variant-logic.js').CardVariant;
 
 export interface RecommendationWidgetSummary {
   id: string;
@@ -292,19 +366,59 @@ export interface RecommendationCartContext {
   codes?: string[];
 }
 
+/** The order of a result list: the merchant's ranking, or the shopper's own. */
+export type SearchSort = 'relevance' | 'price_asc' | 'price_desc' | 'newest';
+
 export interface SearchOptions {
+  /** Results per page. Default: the channel's own `behavior.maxResults`. */
   limit?: number;
+  /**
+   * Results to skip, for the next page: pass `hits.length` of what you already
+   * hold. The API reads at most the first 500 results of a search.
+   */
+  offset?: number;
+  /** Default `relevance`: the merchant's pins and ranking rules apply to it only. */
+  sort?: SearchSort;
   minPrice?: number;
   maxPrice?: number;
   inStock?: boolean;
+  /**
+   * Narrows the results to one category. With a category the query may be empty
+   * (browsing a category, which is not a search and is not reported as one).
+   */
   category?: string;
+  /**
+   * This request runs the shopper's query again, narrowed or ordered another
+   * way (a category chip, a sort): not a new search, so it is not reported
+   * again and does not enter the recent searches. A page past the first is one
+   * without saying so.
+   */
+  refinement?: boolean;
+}
+
+/** One category of a result list, with how many of the results it holds. */
+export interface SearchCategoryFacet {
+  /** The catalogue's path: the value to filter by (`options.category`). */
+  name: string;
+  count: number;
+  /** The visitor's language's name for it, when the catalogue has one. */
+  label?: string;
 }
 
 export interface SearchResult {
   query: string;
   hits: SelwiseProduct[];
+  /** Every match, whatever the page: the same on each page of one search. */
   total?: number;
-  categories?: Array<{ name: string; count: number }>;
+  /** Where this page started (`options.offset`, as the API read it). */
+  offset?: number;
+  /**
+   * The categories of the results, to filter by. Filled from the hits when the
+   * API did not send them.
+   */
+  categories?: SearchCategoryFacet[];
+  /** "Did you mean": other terms to try. Only sent when nothing matched. */
+  suggestions?: string[];
   /**
    * A merchant search redirect ("kargo" -> the shipping page).
    *
@@ -313,17 +427,70 @@ export interface SearchResult {
    * a rule the merchant configured on purpose, so check this first.
    */
   redirect?: string;
+  /**
+   * Why the list may be empty for a reason that is not "nothing matched":
+   * `off` — search is switched off for this channel, or this visitor is outside
+   * its audience, its experiment's holdout or its test mode's reach; `test` —
+   * it is in test mode and this client was not started with `testMode`. Absent
+   * (or `ready`) when the search ran. An app that draws "no results" for an
+   * `off` or `test` list tells a real shopper that nothing exists, so check it
+   * before the empty state.
+   */
+  status?: 'ready' | 'off' | 'test';
   [key: string]: unknown;
 }
+
+/** The sections of the empty search box, each already cut to the channel's own limit. */
+export interface SearchSuggestionSections {
+  /** This device's last searches, newest first. Empty when the visitor's consent does not keep them. */
+  recent: string[];
+  popularSearches: string[];
+  popularCategories: Array<{ name: string; imageUrl?: string }>;
+  popularProducts: SelwiseProduct[];
+  /**
+   * The sections that have something to show, in the order the merchant
+   * arranged them (`suggestions.order`).
+   */
+  order: Array<'recent' | 'popularSearches' | 'popularCategories' | 'popularProducts'>;
+}
+
+/** What opened the search: a button, the field taking focus, typing. */
+export type SearchOpenTrigger = 'click' | 'focus' | 'typing';
+
+/** The suggestion a shopper tapped. */
+export type SearchSuggestionKind = 'recent' | 'popularSearch' | 'popularCategory' | 'popularProduct';
 
 export interface OrderItemInput {
   /** MUST match `item_code` in the product feed. */
   productItemCode: string;
   name?: string;
   quantity?: number;
+  /** What the shopper paid per unit. */
   unitPrice?: number;
+  /**
+   * The unit's LIST price, when the line was sold below it. Kept with the line
+   * (`metadata.originalPrice`); price and discount reports compare the paid
+   * price with the catalogue's list price.
+   */
+  originalPrice?: number;
   totalPrice?: number;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * A marketing permission the shopper decided at checkout (an "email me about
+ * offers" box). Recorded as a contact's consent with the checkout as its
+ * source — the only door an order has for an address or a number: it carries
+ * no customer e-mail or phone field of its own.
+ */
+export interface OrderMarketingConsent {
+  kind: 'email' | 'phone';
+  /** The address or number the decision is for (`+905321112233`). */
+  value: string;
+  /** `true`: the shopper ticked the box. `false`: they declined, or withdrew. */
+  optIn: boolean;
+  /** The wording shown beside the box, as evidence. */
+  note?: string;
 }
 
 export interface OrderInput {
@@ -346,7 +513,22 @@ export interface OrderInput {
   placedAt?: string;
   items?: OrderItemInput[];
   metadata?: Record<string, unknown>;
+  /** What the shopper decided about marketing at checkout. Omit when the checkout asked nothing. */
+  marketingConsent?: OrderMarketingConsent[];
 }
+
+/** The OS's notification permission for the app, as the host reports it (`setPushPermission`). */
+export type PushPermission = 'granted' | 'denied' | 'undetermined';
+
+/**
+ * The family a device token belongs to — which of the merchant's providers
+ * sends to it: an FCM registration token, an APNs device token (iOS only), or
+ * an Expo push token.
+ */
+export type PushProvider = 'fcm' | 'apns' | 'expo';
+
+/** The phone's operating system, for a token that works on both (FCM, Expo). */
+export type PushPlatform = 'ios' | 'android';
 
 /** Thrown for a non-2xx API response. Network faults surface as the underlying error. */
 export class SelwiseApiError extends Error {

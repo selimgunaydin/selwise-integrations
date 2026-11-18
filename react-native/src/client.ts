@@ -7,6 +7,8 @@ import {
 } from './vendor/consent-categories.js';
 import { generateId, IdentityManager } from './core/ids.js';
 import { messageMedium, readDeepLinkAttribution, type DeepLinkAttribution } from './core/deep-link.js';
+import { PushDeviceRegistrar, normalizePushRegistration, pushLinkOf } from './core/push-device.js';
+import { readQaLink, type QaOverride } from './core/qa-link.js';
 import { isEphemeralStorage, MemoryStorage, SafeStorage } from './core/storage.js';
 import {
   DismissalStore,
@@ -20,7 +22,33 @@ import {
   type SurfaceFilter,
 } from './core/surfaces.js';
 import { normalizeProductInput, type ProductInput } from './core/product.js';
+import { Emitter, type Unsubscribe } from './core/events.js';
+import {
+  NO_SCREEN,
+  type ProductState,
+  type ScreenInfo,
+  type ScreenState,
+  type SelwiseEvents,
+} from './core/state.js';
+import { StripService } from './core/strips.js';
+import {
+  describeNotShown,
+  NotShownLedger,
+  type NotShownDetail,
+  type NotShownInput,
+  type NotShownReport,
+} from './core/not-shown.js';
+import type { AppExplainReason } from './vendor/app-not-shown.js';
+import {
+  applyScreenSlotArms,
+  screenSlotArmAt,
+  screenSlotArmsOn,
+  slotArmStrip,
+  type ScreenSlotArm,
+} from './core/screen-slot.js';
 import { CartStore, withCartSignals, type CartInput } from './core/cart.js';
+import { VisitorSignals } from './core/visitor-signals.js';
+import { ProductCountCache, type ProductCountQuestion } from './core/product-counts.js';
 import {
   GoalReachedStore,
   HIDDEN_GOAL_BAR_VIEW,
@@ -37,8 +65,10 @@ import {
 import { normalizeRemoteConfig, type RemoteConfig } from './core/remote-config.js';
 import { AppPresence, isActiveAppState } from './core/presence.js';
 import { isInControlGroup } from './vendor/control-group.js';
-import { resolveForDevice } from './vendor/devices.js';
-import type { BehaviorSnapshot } from './vendor/page-targeting.js';
+import type { SearchBehavior, SearchSettings } from './vendor/search-settings.js';
+import { SearchService, type SearchResolution } from './core/search.js';
+import { SingleFlight } from './core/single-flight.js';
+import { evaluatePageTypeTargeting, type BehaviorSnapshot } from './vendor/page-targeting.js';
 import {
   ScenarioSeenStore,
   normalizeScenarioInbox,
@@ -61,10 +91,11 @@ import {
   ExperimentGate,
   FrequencyCapStore,
   heldOutCapKey,
-  isRecord,
   SegmentGate,
   type ExperimentAssignment,
+  type FrequencyCapConfig,
 } from './core/eligibility.js';
+import { isRecord } from './core/records.js';
 import {
   resolveRecommendationArm,
   toResolvedRecommendationWidget,
@@ -73,28 +104,39 @@ import {
 } from './core/recommendation-arms.js';
 import { EventQueue, type QueuedEvent } from './transport/queue.js';
 import { HttpClient } from './transport/http.js';
+import { appScreenOfUrl } from './vendor/app-surfaces.js';
 import {
   SelwiseApiError,
   type ConsentSnapshot,
   type OrderInput,
+  type PushPermission,
+  type PushPlatform,
+  type PushProvider,
   type RecommendationCartContext,
   type RecommendationContext,
   type RecommendationProductsResult,
   type RecommendationWidgetSummary,
   type ResolvedRecommendationWidget,
+  type SearchOpenTrigger,
   type SearchOptions,
   type SearchResult,
+  type SearchSuggestionKind,
+  type SearchSuggestionSections,
+  type SelwiseProduct,
   type SelwiseInitOptions,
   type SelwiseStorage,
   type TrackOptions,
 } from './types.js';
 
-export const SDK_VERSION = '1.5.0';
+export const SDK_VERSION = '2.0.0';
 
 /** How many links opened before init() resolves are kept for it. */
 const PENDING_DEEP_LINKS_MAX = 5;
 
 const DEFAULT_API_URL = 'https://api.selwise.com/api/v1';
+
+/** The longest `appVersion` / `appLocale` the segment request carries (the server's `APP_ATTRIBUTE_MAX_LENGTH`). */
+const APP_FACT_MAX_LENGTH = 32;
 
 /**
  * How many requests one `flush()` may make.
@@ -110,6 +152,33 @@ const DEFAULT_BATCH_SIZE = 20;
 const MAX_BATCH_SIZE = 200;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_TIMEOUT_MS = 10000;
+/** How long collected scenario claims are kept before the inbox is asked again. */
+const SCENARIO_CLAIMS_TTL_MS = 60_000;
+/**
+ * How old the read `/config` may get before a return to the foreground or a new
+ * screen reads it again — the server keeps its answer for the same five minutes,
+ * so asking sooner would only get the same list back.
+ */
+export const CONFIG_REFRESH_AFTER_MS = 5 * 60_000;
+/** After a failed re-read, how long until the next trigger may try again. */
+const CONFIG_RETRY_AFTER_MS = 30_000;
+/** How many distinct screens and points one session reports: what the API keeps (`CHANNEL_INTEGRATION_MAX_ENTRIES`). */
+const INTEGRATION_NAMES_MAX = 64;
+
+/** The scenario provenance an impression, click or close carries (the browser widget's keys). */
+function scenarioMetadata(scenario: Surface['scenario']): Record<string, string> {
+  return scenario
+    ? { scenarioId: scenario.scenarioId, scenarioRunId: scenario.runId, scenarioNodeId: scenario.nodeId }
+    : {};
+}
+
+/** A scenario claim turned into a surface a host can draw. */
+export interface ScenarioSurface {
+  deliveryId: string;
+  surface: Surface;
+}
+/** How long a new screen or point waits for company before the dashboard is told. */
+const INTEGRATION_REPORT_DELAY_MS = 3000;
 const DEFAULT_MAX_QUEUE_SIZE = 500;
 
 /**
@@ -138,7 +207,7 @@ export class Selwise {
       SelwiseInitOptions,
       'apiKey' | 'apiUrl' | 'batchSize' | 'flushIntervalMs' | 'timeoutMs' | 'maxQueueSize' | 'clientPlatform' | 'clientVersion'
     >
-  > & { siteKey: string; debug: boolean };
+  > & { siteKey: string; debug: boolean; pluginVersion?: string; appVersion?: string; platform?: 'ios' | 'android' };
 
   private storage: SelwiseStorage = new MemoryStorage();
   private dismissals!: DismissalStore;
@@ -146,6 +215,8 @@ export class Selwise {
   private experiments!: ExperimentGate;
   private caps!: FrequencyCapStore;
   private goalReached!: GoalReachedStore;
+  /** The clock and session signals the SDK fills itself (`core/visitor-signals.ts`). */
+  private visitor!: VisitorSignals;
   /**
    * The basket the host reported. Memory only, and usable before `init()`: a
    * host's basket subscription may fire first, and a stale cart from a previous
@@ -165,10 +236,31 @@ export class Selwise {
    */
   private readonly scenarioSeen = new ScenarioSeenStore();
   private configPromise: Promise<Record<string, unknown> | null> | null = null;
+  /** When `/config` was last read (0: not yet), and what it said — a re-read is judged against it. */
+  private configLoadedAt = 0;
+  private configSignature = '';
+  private configVersion = 0;
+  private readonly configRefresh = new SingleFlight<'config', void>();
   /** The option keys the host passed explicitly. Those never lose to /config. */
   private explicitOptions = new Set<string>();
   private testMode = false;
-  private searchBehavior: Promise<SearchBehavior | null> | null = null;
+  // What the dashboard has not been told yet: screens shown and named points
+  // mounted since the last report. See `noteIntegration`.
+  private pendingScreens = new Set<string>();
+  private pendingSlots = new Set<string>();
+  private reportedScreens = new Set<string>();
+  private reportedSlots = new Set<string>();
+  private integrationTimer: ReturnType<typeof setTimeout> | null = null;
+  private integrationReportingOn = true;
+  /** `qaLinks: true` — a link may put this session in test mode and force arms. */
+  private qaLinksOn = false;
+  /** experimentId → variantId, forced by a QA link for this session. */
+  private qaVariants: Record<string, string> = {};
+  /** Claims collected from the scenario inbox, kept briefly so each SCREEN can judge them without a request. */
+  private scenarioClaims: { at: number; entries: ScenarioInboxEntry[] } | null = null;
+  /** The inbox request in flight, shared by every caller that arrives meanwhile. */
+  private scenarioInboxPending: Promise<ScenarioInboxEntry[]> | null = null;
+  private searchService: SearchService | null = null;
   /**
    * Experiment arms this process has already reported an exposure for. The
    * server's primary key counts a visitor once whatever is sent; this only
@@ -187,6 +279,11 @@ export class Selwise {
   private http!: HttpClient;
   private endpointsApi!: Endpoints;
 
+  /** The OS's notification permission as the host reported it (`setPushPermission`). */
+  private pushPermission: PushPermission | undefined;
+  /** The phone's registration for app push (`registerPushToken`); built once `init()` has resolved. */
+  private pushDevices: PushDeviceRegistrar | null = null;
+
   private initialized = false;
   private destroyed = false;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
@@ -194,6 +291,21 @@ export class Selwise {
   private presence: AppPresence | null = null;
   private flushInFlight: Promise<void> | null = null;
   private currentPageUrl: string | undefined;
+  /** The screen the host named, with its page type — what `on('screen')` reports. */
+  private screenState: ScreenState = NO_SCREEN;
+  /** The product on the current product screen, and the key that says whether it changed. */
+  private productState: { product: ProductState; key: string } = { product: null, key: 'null' };
+  /** The social-proof counters' numbers (`getProductCount`). */
+  private productCounts: ProductCountCache | null = null;
+  private readonly emitter = new Emitter<SelwiseEvents>((event, error) =>
+    this.log(`A listener of "${event}" failed`, error)
+  );
+  private stripService: StripService | null = null;
+  /**
+   * Why each campaign and strip the API sent is not on the current screen
+   * (`explain()`). Written by the code that decides, never read to decide.
+   */
+  private readonly notShown = new NotShownLedger((report) => this.log(describeNotShown(report)));
   /**
    * Deep-link landings already recorded in the CURRENT session (`trackDeepLink`).
    * A new session starts an empty set, so the set never outgrows one session.
@@ -211,6 +323,16 @@ export class Selwise {
 
   get isInitialized(): boolean {
     return this.initialized;
+  }
+
+  /**
+   * Whether the host started this client with `debug: true`, which is what draws
+   * the on-device diagnostics button (`SelwiseDebugOverlay`). Only an explicit
+   * `true` counts: the dashboard may switch the SDK's log on remotely for a
+   * merchant chasing a problem, but never puts a button on a visitor's screen.
+   */
+  get debugOverlayEnabled(): boolean {
+    return this.explicitOptions.has('debug') && this.options?.debug === true;
   }
 
   async init(options: SelwiseInitOptions): Promise<void> {
@@ -258,6 +380,9 @@ export class Selwise {
       clientPlatform: options.clientPlatform ?? 'react-native',
       clientVersion: options.clientVersion ?? SDK_VERSION,
       debug: options.debug === true,
+      ...(options.pluginVersion ? { pluginVersion: options.pluginVersion } : {}),
+      ...(options.appVersion ? { appVersion: options.appVersion } : {}),
+      ...(options.platform === 'ios' || options.platform === 'android' ? { platform: options.platform } : {}),
     };
 
     if (requestedBatchSize > MAX_BATCH_SIZE) {
@@ -280,6 +405,12 @@ export class Selwise {
     this.dismissals = new DismissalStore(this.storage, () => this.identity.getSessionId());
     this.caps = new FrequencyCapStore(this.storage);
     this.goalReached = new GoalReachedStore(this.storage);
+    // On the device only while the visitor's answer allows measuring them.
+    this.visitor = new VisitorSignals(
+      this.storage,
+      () => this.identity.getSessionId(),
+      () => this.consent.hasCategory('analytics')
+    );
     this.enrichmentCache = new EnrichmentCache();
     this.experiments = new ExperimentGate();
     this.segments = new SegmentGate(async (segmentIds, context) => {
@@ -299,10 +430,18 @@ export class Selwise {
         // nothing" — every segment-targeted surface silently hidden.
         deviceType: 'mobile',
         ...(pageUrl ? { pageUrl } : {}),
+        // What an app segment (platform, release, push permission, opened
+        // screens) is judged on. This request already waits on the
+        // personalization answer, and the screen history was written only
+        // with the analytics one (`VisitorSignals`).
+        ...this.appFacts(),
+        screenDaysAgo: this.visitor.screenDaysAgo(),
       });
       return response?.results ?? {};
     }, undefined, undefined, () => this.identity.getSiteUserId() || undefined);
     this.testMode = options.testMode === true;
+    this.integrationReportingOn = options.reportIntegration !== false;
+    this.qaLinksOn = options.qaLinks === true;
     this.queue = new EventQueue({
       storage: this.storage,
       maxQueueSize: this.options.maxQueueSize,
@@ -345,6 +484,7 @@ export class Selwise {
       this.dismissals.hydrate(),
       this.caps.hydrate(),
       this.goalReached.hydrate(),
+      this.visitor.hydrate(),
     ]);
 
     if (options.siteUserId) {
@@ -353,7 +493,29 @@ export class Selwise {
 
     this.initialized = true;
     this.destroyed = false;
+    // After consent and identity are hydrated and `ready` is true: the stored
+    // token's restore may revoke at once when consent was withdrawn.
+    this.pushDevices = new PushDeviceRegistrar({
+      storage: () => this.storage,
+      register: (body) => this.endpointsApi.registerPushDevice(body),
+      revoke: (body) => this.endpointsApi.revokePushDevice(body),
+      ready: () => this.initialized && !this.destroyed,
+      visitorId: () => this.identity.getVisitorId(),
+      siteUserId: () => this.identity.getSiteUserId() ?? null,
+      permission: () => this.pushPermission,
+      appVersion: () => this.appFacts().appVersion,
+      locale: () => this.appFacts().appLocale,
+      defaultPlatform: () => this.options.platform,
+      consentAllows: () => this.consentAllows('pushDevice'),
+      log: (message, detail) => this.log(message, detail),
+    });
     this.startFlushTimer();
+    // A screen the host named before `init()` resolved is a screen shown: say so
+    // now that there is somewhere to say it.
+    if (this.currentPageUrl) this.noteIntegration('screen', this.currentPageUrl);
+    // The first report is the versions alone: it tells the dashboard the app is
+    // there before the shopper has opened a single screen.
+    this.scheduleIntegrationReport();
 
     this.log(
       `Initialised (channel ${this.options.siteKey}, ${this.queue.size()} queued event(s))`
@@ -370,6 +532,9 @@ export class Selwise {
       void this.flush();
     }
 
+    // Everything that drew nothing while it waited for the client draws now.
+    this.emitter.emit('ready', true);
+
     // `/config` carries the dashboard's tracking settings and the server's geo
     // lookup, both of which have to be in effect before the first flush and the
     // first targeting decision. Started here and NOT awaited: the settings are
@@ -385,11 +550,19 @@ export class Selwise {
   async destroy(): Promise<void> {
     if (!this.initialized) return;
     this.destroyed = true;
+    this.productCounts = null;
+    this.notShown.reset();
     this.stopFlushTimer();
+    if (this.integrationTimer) {
+      clearTimeout(this.integrationTimer);
+      this.integrationTimer = null;
+    }
     this.presence?.stop();
     await this.flush().catch(() => undefined);
     await this.queue.flushWrites();
+    await this.visitor.flush().catch(() => undefined);
     this.initialized = false;
+    this.emitter.emit('ready', false);
   }
 
   // ---- identity & consent ----
@@ -422,7 +595,14 @@ export class Selwise {
     // `traits` are passed through rather than typed field by field: what a
     // merchant knows about their customer is theirs to decide, and `email` is
     // lifted out only because the server has a column for it.
-    const { email, ...rest } = traits ?? {};
+    //
+    // A phone number is lifted out for the same reason, and is NOT sent: the
+    // identify route has no door for one (a trait would store it in clear text,
+    // readable by every segment and export). A number reaches Selwise as a
+    // consent decision — the order's `marketingConsent`, the newsletter form.
+    const { email, phone, ...rest } = traits ?? {};
+    const appTraits = this.appFacts();
+    const sentTraits = { ...rest, ...appTraits };
 
     // Joining the device to the merchant's customer is processing the
     // visitor's data (`CONSENT_CHANNEL_CATEGORIES.identify`). Without that
@@ -442,7 +622,9 @@ export class Selwise {
         visitorId: this.identity.getVisitorId(),
         sessionId: this.identity.getSessionId(),
         ...(typeof email === 'string' && email ? { email } : {}),
-        ...(Object.keys(rest).length > 0 ? { traits: rest } : {}),
+        // The app's own facts ride with the login so a segment's MEMBERS —
+        // which have no request to read them from — can be judged on them.
+        ...(Object.keys(sentTraits).length > 0 ? { traits: sentTraits } : {}),
         ...(this.currentPageUrl ? { pageUrl: this.currentPageUrl } : {}),
         ...(options?.userHash && /^[0-9a-f]{64}$/i.test(options.userHash)
           ? {
@@ -458,6 +640,9 @@ export class Selwise {
       // and the local id is already set, so events keep carrying it.
       this.log('Identify call failed', error);
     }
+    // The phone now belongs to this customer (the server keeps the link only
+    // for a visitor the identify bound to it).
+    void this.pushDevices?.onIdentityChange();
 
     // The web widget writes an `identify` event here, and a scenario's
     // "identified" starter (`starter.on_event`) listens for it. The server's
@@ -473,6 +658,7 @@ export class Selwise {
         entityId: currentId ?? siteUserId,
         metadata: {
           hasEmail: typeof email === 'string' && email.length > 0,
+          hasPhone: typeof phone === 'string' && phone.length > 0,
           previousId: previousId ?? null,
           visitorId: this.identity.getVisitorId() ?? null,
           merged,
@@ -481,21 +667,130 @@ export class Selwise {
     }
   }
 
+  /**
+   * Tell the SDK whether the OS lets the app notify this person:
+   *
+   * ```ts
+   * selwise.setPushPermission(status === 'authorized' ? 'granted' : status === 'denied' ? 'denied' : 'undetermined');
+   * ```
+   *
+   * Call it at launch and whenever the answer changes. It decides nothing about
+   * delivery (push itself is a later phase); it lets a segment say "has not
+   * allowed notifications" (`pushPermission`). Kept in memory for this launch
+   * and sent with every segment request and, for an identified customer, to
+   * the server so a segment's members can be judged on it too. A segment's
+   * answer is kept for five minutes, so a change is reflected on a surface
+   * within that time.
+   */
+  setPushPermission(state: PushPermission): void {
+    if (state !== 'granted' && state !== 'denied' && state !== 'undetermined') return;
+    if (this.pushPermission === state) return;
+    this.pushPermission = state;
+    // A phone already registered takes the new answer (`push_devices.permission`).
+    void this.pushDevices?.onPermissionChange();
+    const siteUserId = this.identity?.getSiteUserId();
+    if (!this.initialized || this.destroyed || !siteUserId || !this.consentAllows('identify')) return;
+    // Fail-soft: the next identify() carries it anyway.
+    void this.endpointsApi
+      .setUserTraits({
+        externalId: siteUserId,
+        visitorId: this.identity.getVisitorId(),
+        traits: { pushPermission: state },
+      })
+      .catch((error) => this.log('Push permission not sent', error));
+  }
+
+  /**
+   * Register this phone for notifications from the merchant's scenarios.
+   *
+   * The token is the app's own — `@react-native-firebase/messaging`'s
+   * `getToken()`, `expo-notifications`' `getDevicePushTokenAsync()` /
+   * `getExpoPushTokenAsync()`, or the APNs device token — and `provider` says
+   * which family it is, because the merchant connects FCM, APNs and Expo
+   * separately and each phone is sent through its own:
+   *
+   * ```ts
+   * const token = await messaging().getToken();
+   * await selwise.registerPushToken({ token, provider: 'fcm', platform: Platform.OS === 'ios' ? 'ios' : 'android' });
+   * selwise.setPushPermission('granted');
+   * ```
+   *
+   * Call it at every launch and whenever the library reports a refreshed
+   * token; registering the same token twice is one phone. It does nothing
+   * without the person's marketing consent (`setConsent`), and a later
+   * withdrawal revokes the phone. Resolves `true` when the server has the
+   * phone, `false` when the registration was withheld or could not be sent (the
+   * next launch tries again). Throws only for a call that cannot be right: no
+   * token, an unknown provider, no platform.
+   */
+  async registerPushToken(input: {
+    token: string;
+    provider: PushProvider;
+    /** Needed for FCM and Expo tokens unless `init({ platform })` named it; APNs is always iOS. */
+    platform?: PushPlatform;
+  }): Promise<boolean> {
+    this.assertReady();
+    const registration = normalizePushRegistration(input, this.options.platform);
+    return (await this.pushDevices?.register(registration)) ?? false;
+  }
+
+  /**
+   * Stop notifying this phone — the app's own "turn notifications off", or a
+   * logout from push. Revokes the registered token at the server and forgets it.
+   * (A logout of the CUSTOMER is `logout()`, which keeps the phone and unlinks
+   * the person.)
+   */
+  async unregisterPushToken(): Promise<boolean> {
+    this.assertReady();
+    return (await this.pushDevices?.unregister()) ?? false;
+  }
+
+  /**
+   * Call when the person taps a notification. Hand it whatever the push library
+   * gives you (FCM's `RemoteMessage`, Expo's notification response, the data
+   * object, or the link itself); it records the open as a messaging click when
+   * the notification carries Selwise's attribution and returns the link to open
+   * — `app://basket`, the app's own deep link or an https address — or `null`
+   * for a notification Selwise did not send. Opening it is the host's
+   * (`navigate`): the SDK never navigates.
+   *
+   * ```ts
+   * messaging().onNotificationOpenedApp((message) => {
+   *   const link = selwise.trackPushOpen(message);
+   *   if (link) Linking.openURL(link);
+   * });
+   * ```
+   */
+  trackPushOpen(payload: unknown): string | null {
+    const link = pushLinkOf(payload);
+    if (!link) return null;
+    this.trackDeepLink(link);
+    return link;
+  }
+
   /** Clears the logged-in id and starts a new session. Call on logout. */
   async logout(): Promise<void> {
     this.assertReady();
     await this.flush().catch(() => undefined);
     await this.identity.resetSession();
+    // The phone stays reachable as this install; it no longer belongs to the
+    // customer who left.
+    void this.pushDevices?.onIdentityChange();
   }
 
   async setConsent(snapshot: ConsentSnapshot): Promise<void> {
     this.assertReady();
     const experimentsBefore = this.consentAllows('experimentEvents');
     await this.consent.set(snapshot);
+    this.emitter.emit('consent', this.consent.get());
+    // Marketing withdrawn revokes the registered phone; granted sends a withheld one.
+    void this.pushDevices?.onConsentChange();
     // Assignments are fetched once per launch; a decision that changes
     // whether this visitor may be in an experiment at all starts that over.
     if (this.consentAllows('experimentEvents') !== experimentsBefore) {
       this.experiments = new ExperimentGate();
+      // A point that resolved its screen experiment asks again.
+      this.emitter.emit('experiments', ++this.experimentsVersion);
     }
     const held = this.identifyAwaitingConsent;
     if (held && this.consentAllows('identify')) {
@@ -514,20 +809,330 @@ export class Selwise {
   }
 
   /**
+   * Whether this channel waits for the app's consent decision — the dashboard's
+   * "ask for consent before tracking" (Cookie Consent → Policy). Reads `/config`
+   * once, so it is a promise; an earlier launch's answer stands in when the read
+   * fails. While it is `true` and `setConsent()` has not been called, every event
+   * is held and every figure in the dashboard stays at zero.
+   */
+  async isConsentRequired(): Promise<boolean> {
+    this.assertReady();
+    if (!this.remote) await this.loadRemoteConfig();
+    return this.consent.isDecisionRequired();
+  }
+
+  /**
+   * The channel requires a decision and none has been given: nothing is being
+   * sent. Judged from what is known now (`isConsentRequired` reads `/config`
+   * first).
+   */
+  isAwaitingConsent(): boolean {
+    this.assertReady();
+    return this.consent.isAwaitingDecision();
+  }
+
+  /**
    * Sets the synthetic page URL reported with subsequent events.
    *
    * A native app has no location, but page targeting, funnels and journeys are
    * all URL-shaped server-side. Use one stable value per screen — `app://product`,
    * `app://category`, `app://basket` — and target those in the dashboard.
    */
-  setScreen(pageUrl: string): void {
-    this.assertReady();
+  setScreen(pageUrl: string, info: ScreenInfo = {}): void {
     // No flush needed: every event carries the screen it was tracked on and
     // `EventQueue.take()` never mixes screens into one batch. Flushing here
     // instead would cost a request per screen and still get it wrong whenever
     // a flush was already in flight.
     this.currentPageUrl = pageUrl;
-    this.presence?.noteActivity();
+    if (this.initialized && !this.destroyed) {
+      this.presence?.noteActivity();
+      this.noteIntegration('screen', pageUrl);
+    }
+
+    // The state is the host's to set whenever it knows the screen — often before
+    // `init()` resolves — and is what the components draw from (`on('screen')`).
+    const next: ScreenState = {
+      pageUrl,
+      screenName: info.screenName ?? null,
+      pageType: info.pageType ?? null,
+    };
+    const before = this.screenState;
+    if (
+      before.pageUrl === next.pageUrl &&
+      before.screenName === next.screenName &&
+      before.pageType === next.pageType
+    ) {
+      return;
+    }
+    this.screenState = next;
+    this.emitter.emit('screen', next);
+    if (this.initialized && !this.destroyed) this.refreshRemoteConfigIfStale();
+  }
+
+  /**
+   * The screen the host last named with `setScreen` / `trackScreenView`:
+   * `pageUrl: null` until it has. Read it, then subscribe with `on('screen')`.
+   */
+  getScreen(): ScreenState {
+    return this.screenState;
+  }
+
+  /**
+   * The product the current product screen shows, for `{product.*}` in a
+   * campaign's words and for product conditions (see `ProductInput`): its facts,
+   * `{ pending: true }` while the screen is still loading it — never the
+   * previous product's facts — and `null` on any other screen or when it is
+   * unknown. The HOST decides what is "the current screen's product" and calls
+   * this on every change, including with `null` when the shopper leaves the
+   * product screen; the components ask for their surfaces again when it moves.
+   *
+   * `key` says whether the product is a different one: without it the facts
+   * themselves are compared. Pass your own when the same facts refetched should
+   * still count as a change.
+   */
+  setProduct(product: ProductState, key?: string): void {
+    const next = product ?? null;
+    const nextKey = key ?? JSON.stringify(next);
+    const changed = nextKey !== this.productState.key;
+    this.productState = { product: next, key: nextKey };
+    if (changed) this.emitter.emit('product', next);
+  }
+
+  /** The product `setProduct` last set, or `null`. */
+  getProduct(): ProductState {
+    return this.productState.product;
+  }
+
+  /**
+   * The number behind a social-proof counter surface: how many people viewed
+   * `question.product` in the period, or have it in a basket. Read from the same
+   * public routes the browser widget reads, with the channel's key; cached a minute
+   * per product and period and shared while in flight (`ProductCountCache`).
+   * `null` when it could not be read — a counter never prints that as a zero.
+   *
+   * It is aggregate, with no visitor in it, so it needs no consent.
+   */
+  getProductCount(question: ProductCountQuestion): Promise<number | null> {
+    this.assertReady();
+    if (!this.productCounts) {
+      this.productCounts = new ProductCountCache(async (asked) => {
+        try {
+          const answer = await this.endpointsApi.getProductMetric(asked);
+          return Number(answer?.count) || 0;
+        } catch (error) {
+          this.log('Could not read a product count', error);
+          return null;
+        }
+      });
+    }
+    return this.productCounts.ask(question);
+  }
+
+  /**
+   * Subscribe to a state change (`SelwiseEvents`): `ready`, `screen`,
+   * `product`, `cart`, `theme`, `consent`, `locale`, `experiments`, `config`. Returns the unsubscribe.
+   * The listener is not called with the current value — read it first.
+   */
+  on<K extends keyof SelwiseEvents & string>(event: K, listener: (value: SelwiseEvents[K]) => void): Unsubscribe {
+    // The cart has its own subscription: `onCartChange` was there first.
+    if (event === 'cart') return this.cart.subscribe(listener as (value: SelwiseEvents['cart']) => void);
+    return this.emitter.on(event, listener);
+  }
+
+  /**
+   * The recommendation strips of a screen: the list with the visitor's A/B arm
+   * applied, each strip's products, and the shared requests behind them (see
+   * `StripService`). One service per client, so every component and every host
+   * call that asks about the same screen rides on the same answer.
+   */
+  get strips(): StripService {
+    if (!this.stripService) {
+      this.stripService = new StripService(this, (message, error) => this.log(message, error), this.notShown);
+    }
+    return this.stripService;
+  }
+
+  /**
+   * Why a campaign or a recommendation strip the API sent is not on the screen
+   * the app is on — the device's answer to the dashboard's "Why is this not in my
+   * app?". Without an argument: every one that is not shown, with its reason;
+   * with a campaign id or a strip's widget id: that one's (an empty list means
+   * nothing is on record against it — it is drawn, or it was never sent).
+   *
+   * ```ts
+   * selwise.explain();
+   * // [{ id: 'c1', kind: 'campaign', type: 'announcement_bar', screen: 'app://home',
+   * //    reason: 'segment', waiting: false, detail: {}, at: 1763376000000 }]
+   * ```
+   *
+   * `reason` is one of the codes of `@selwise/widget-contract/app-not-shown` the
+   * dashboard's checklist uses too (`screens`, `segment`, `frequency_cap`,
+   * `campaignSlot`, `below_min_count`…). `waiting: true` is a surface armed for a
+   * trigger (`trigger_armed`): it will show, it has not failed. The SDK records a
+   * reason where it decides, so this is what the screen did, never a second guess;
+   * debug mode (`init({ debug: true })`) prints each as it is recorded.
+   *
+   * What it cannot say: a campaign outside its schedule, or with delivery off, is
+   * never sent to the device, so there is nothing on record for it.
+   */
+  explain(surfaceOrStripId?: string): NotShownReport[] {
+    const id = typeof surfaceOrStripId === 'string' ? surfaceOrStripId.trim() : '';
+    return this.notShown.list({ screen: this.currentPageUrl ?? null, ...(id ? { id } : {}) });
+  }
+
+  /**
+   * The overlay's side of `explain()`: what it left off the screen after the client
+   * had delivered it (a point it does not mount, a counter under its threshold, a
+   * trigger not yet fired). Replaces the overlay's previous answer for the screen
+   * as a whole. Not for a host's own use.
+   *
+   * @internal
+   */
+  noteDrawn(screen: string, kind: 'campaign' | 'strip', inputs: readonly NotShownInput[]): void {
+    this.notShown.replace('draw', kind, screen, inputs);
+  }
+
+  /**
+   * What a product-content slot (`pdp-specs`) did on the current screen: the reason
+   * it draws nothing, or `null` once something is drawn. Written by the code that
+   * decides (`getEnrichment`, `<SelwiseEnrichment>`), read by `explain()`.
+   *
+   * @internal
+   */
+  noteEnrichment(slot: string, reason: AppExplainReason | null, detail?: NotShownDetail): void {
+    if (!slot) return;
+    if (reason === null) {
+      this.notShown.clear('enrichment', slot);
+      return;
+    }
+    this.notShown.note('draw', this.currentPageUrl ?? '', {
+      id: slot,
+      kind: 'enrichment',
+      reason,
+      ...(detail ? { detail } : {}),
+    });
+  }
+
+  /**
+   * Apply a QA link (`?selwise_test=1&selwise_variant=<experiment>:<arm>`) to this
+   * session: test mode, and the chosen arms forced. Only for a client started with
+   * `qaLinks: true`; `trackDeepLink` does it for every link that opens the app.
+   * Returns what the link asked for, or null.
+   */
+  applyQaLink(url: string): QaOverride | null {
+    this.assertReady();
+    if (!this.qaLinksOn) {
+      this.log('QA link ignored: init({ qaLinks: true }) is off');
+      return null;
+    }
+    const qa = readQaLink(url);
+    if (qa) this.applyQa(qa);
+    return qa;
+  }
+
+  private applyQa(qa: QaOverride): void {
+    if (qa.testMode !== undefined) this.testMode = qa.testMode;
+    // Test mode off is the way back: it drops the forced arms with it.
+    this.qaVariants = qa.testMode === false ? {} : { ...this.qaVariants, ...qa.variants };
+    // Everything decided under the old mode is decided again: the arms (a fresh
+    // fetch with the forced ones), the surfaces, the enrichment and the claims.
+    this.experiments = new ExperimentGate();
+    this.emitter.emit('experiments', ++this.experimentsVersion);
+    this.invalidateSurfaces();
+    this.invalidateEnrichment();
+    this.stripService?.invalidate();
+    this.scenarioClaims = null;
+    this.scenarioInboxPending = null;
+    this.log(
+      `QA link applied: test mode ${this.testMode ? 'on' : 'off'}, ${Object.keys(this.qaVariants).length} forced arm(s)`
+    );
+    this.scheduleIntegrationReport();
+  }
+
+  /**
+   * A named point (`pdp-under-info`) this app has mounted — what
+   * `<SelwiseSlot>` calls on mount. The dashboard then shows the point as
+   * "connected in your app" and a strip sent to a point the app never mounted
+   * as the one that cannot appear. Safe to call before `init()` and on every
+   * render: a name is reported once per session.
+   */
+  registerSlot(slot: string): void {
+    this.noteIntegration('slot', slot);
+  }
+
+  /**
+   * The inbox claims, from the short-lived copy or one request. A screen change, a
+   * cart change and a foreground can all ask at once on a cold start: they share the
+   * request that is already on its way instead of each sending their own.
+   */
+  private scenarioInboxEntries(refresh: boolean): Promise<ScenarioInboxEntry[]> {
+    const held = this.scenarioClaims;
+    if (!refresh && held && Date.now() - held.at <= SCENARIO_CLAIMS_TTL_MS) return Promise.resolve(held.entries);
+    if (this.scenarioInboxPending) return this.scenarioInboxPending;
+    const request: Promise<ScenarioInboxEntry[]> = this.getScenarioInbox()
+      .then((entries) => {
+        // A QA link may have reset the claims while this was in flight: its answer is stale.
+        if (this.scenarioInboxPending === request) this.scenarioClaims = { at: Date.now(), entries };
+        return entries;
+      })
+      .finally(() => {
+        if (this.scenarioInboxPending === request) this.scenarioInboxPending = null;
+      });
+    this.scenarioInboxPending = request;
+    return request;
+  }
+
+  /**
+   * Queue a screen or a point for the next report. Reported ONCE per session
+   * each and batched for a few seconds, so a screen flicker or a re-render never
+   * becomes a request; and never awaited — a report is a courtesy.
+   */
+  private noteIntegration(kind: 'screen' | 'slot', value: string): void {
+    if (!this.integrationReportingOn) return;
+    const name = value.trim();
+    if (!name) return;
+    const [reported, pending] =
+      kind === 'screen'
+        ? [this.reportedScreens, this.pendingScreens]
+        : [this.reportedSlots, this.pendingSlots];
+    if (reported.has(name) || pending.has(name)) return;
+    // The server keeps this many; a host that names a screen per product would only
+    // push the real screens out of it, one request at a time.
+    if (reported.size + pending.size >= INTEGRATION_NAMES_MAX) return;
+    pending.add(name);
+    this.scheduleIntegrationReport();
+  }
+
+  private scheduleIntegrationReport(): void {
+    if (!this.integrationReportingOn || !this.initialized || this.integrationTimer) return;
+    this.integrationTimer = setTimeout(() => {
+      this.integrationTimer = null;
+      void this.sendIntegrationReport();
+    }, INTEGRATION_REPORT_DELAY_MS);
+  }
+
+  private async sendIntegrationReport(): Promise<void> {
+    if (!this.initialized || this.destroyed || !this.integrationReportingOn) return;
+    const screens = [...this.pendingScreens];
+    const slots = [...this.pendingSlots];
+    // Marked sent before the request: a failure is retried by the NEXT new
+    // name, not by a loop, and a name is never sent twice in a session.
+    for (const name of screens) this.reportedScreens.add(name);
+    for (const name of slots) this.reportedSlots.add(name);
+    this.pendingScreens.clear();
+    this.pendingSlots.clear();
+    try {
+      await this.endpointsApi.reportClient({
+        screens,
+        slots,
+        libraryVersion: SDK_VERSION,
+        ...(this.options.pluginVersion ? { pluginVersion: this.options.pluginVersion } : {}),
+        ...(this.options.appVersion ? { appVersion: this.options.appVersion } : {}),
+        testMode: this.testMode,
+      });
+    } catch (error) {
+      this.log('Integration report not sent', error);
+    }
   }
 
   /**
@@ -539,14 +1144,18 @@ export class Selwise {
    * ```
    *
    * `'active'` keeps the live heartbeat going (and sends one at once when the
-   * app comes back); anything else stops it and flushes the event queue, as
-   * the app may not get another chance.
+   * app comes back); anything else stops it, flushes the event queue and writes
+   * the visitor's session counters, as the app may not get another chance.
    */
   setAppState(state: string): void {
     if (!this.initialized || this.destroyed) return;
     const active = isActiveAppState(state);
     this.presence?.setForeground(active);
-    if (!active) void this.flush();
+    if (active) this.refreshRemoteConfigIfStale();
+    if (!active) {
+      void this.flush();
+      void this.visitor.flush().catch(() => undefined);
+    }
   }
 
   // ---- tracking ----
@@ -587,6 +1196,8 @@ export class Selwise {
     if (options.parentEventId !== undefined) event.parentEventId = options.parentEventId;
 
     this.queue.add(event);
+    // The session counters a targeting rule reads (`searchesThisSession`, …).
+    this.visitor.recordEvent(name, options.metadata);
     this.presence?.noteActivity();
 
     if (this.queue.size() >= this.options.batchSize) {
@@ -622,14 +1233,19 @@ export class Selwise {
     });
   }
 
-  trackScreenView(pageUrl: string, metadata?: TrackOptions['metadata']): void {
-    this.setScreen(pageUrl);
+  trackScreenView(pageUrl: string, metadata?: TrackOptions['metadata'], info?: ScreenInfo): void {
+    this.setScreen(pageUrl, info);
     // `cartSource: 'host'` when the app has told us its cart — the channel
     // overview's "is the cart measured here", the same stamp the browser
     // widget puts on its page views.
+    // `referrer: ''` is what makes a screen view that no deep link opened read as
+    // `direct`: an app has no referring page, and a view with no `referrer` key
+    // at all is one whose source nobody measured. The host's own value wins.
+    const measured: NonNullable<TrackOptions['metadata']> = { referrer: '', ...(metadata || {}) };
     const stamped: TrackOptions['metadata'] = this.cart.get().known
-      ? { ...(metadata || {}), cartSource: 'host' }
-      : metadata;
+      ? { ...measured, cartSource: 'host' }
+      : measured;
+    if (this.initialized && !this.destroyed) this.visitor.recordPageView(Date.now(), appScreenOfUrl(pageUrl)?.key);
     this.track('page_view', {
       entityType: 'page',
       entityId: pageUrl,
@@ -665,7 +1281,10 @@ export class Selwise {
    */
   trackDeepLink(url: string): DeepLinkAttribution | null {
     const attribution = readDeepLinkAttribution(url);
-    if (!attribution) return null;
+    const qa = readQaLink(url);
+    // A QA link carries no attribution; it is still a link worth keeping until
+    // `init()` has said whether QA links are on.
+    if (!attribution && !qa) return null;
     if (!this.initialized) {
       // Before init() resolves — the cold-start link nearly always is. Kept
       // (a few, once each) and recorded when init() finishes.
@@ -675,6 +1294,8 @@ export class Selwise {
       return attribution;
     }
     if (this.destroyed) return null;
+    if (qa && this.qaLinksOn) this.applyQa(qa);
+    if (!attribution) return null;
     const sessionId = this.identity.getSessionId();
     if (this.recordedLandingsSession !== sessionId) {
       this.recordedLandings.clear();
@@ -854,24 +1475,66 @@ export class Selwise {
     // and the SDK returned it as it came: a test-mode draft went to every
     // shopper and a strip for "VIP customers" to everyone.
     const visible: RecommendationWidgetSummary[] = [];
+    const screen = pageUrl ?? this.currentPageUrl ?? '';
+    const screenPageType = this.pageTypeOfScreen(screen);
+    const rejections: NotShownInput[] = [];
+    const isDraft = (widget: RecommendationWidgetSummary) =>
+      widget.isTestMode === true || (widget as { testMode?: unknown }).testMode === true;
+    // Every segment the strips that get that far name, asked in ONE request.
+    const audienceOf = (widget: RecommendationWidgetSummary) => ({
+      mode: typeof widget.segmentTargetingMode === 'string' ? widget.segmentTargetingMode : undefined,
+      segmentIds: widget.segmentIds,
+    });
+    // The API filters the list by the screen's address only; a strip's page
+    // types (a basket strip on `cart`) are judged here, as the browser widget
+    // does. A screen whose type is unknown still shows the strip.
+    const offPageType = (widget: RecommendationWidgetSummary) => {
+      const types = (widget as { pageTypes?: unknown }).pageTypes;
+      const named = Array.isArray(types) ? types.filter((t): t is string => typeof t === 'string') : [];
+      return named.length > 0 && !evaluatePageTypeTargeting({ types: named as never }, screenPageType);
+    };
+    const asked = widgets.filter(
+      (widget) => widget?.id && !(isDraft(widget) && !this.testMode) && !offPageType(widget)
+    );
+    const verdicts = await this.segments.shouldShowMany(asked.map(audienceOf), { pageUrl: screen });
+    const inSegmentById = new Map(asked.map((widget, index) => [widget.id, verdicts[index]] as const));
     for (const widget of widgets) {
       if (!widget?.id) continue;
-      const draft = widget.isTestMode === true || (widget as { testMode?: unknown }).testMode === true;
-      if (draft && !this.testMode) {
+      if (isDraft(widget) && !this.testMode) {
         this.log(`Recommendation strip is in test mode: ${widget.id}`);
+        rejections.push({ id: widget.id, kind: 'strip', reason: 'test' });
         continue;
       }
-      const inSegment = await this.segments.shouldShow(
-        typeof widget.segmentTargetingMode === 'string' ? widget.segmentTargetingMode : undefined,
-        widget.segmentIds,
-        { pageUrl: pageUrl ?? this.currentPageUrl ?? '' }
-      );
+      if (offPageType(widget)) {
+        this.log(`Recommendation strip is for other page types: ${widget.id}`);
+        rejections.push({
+          id: widget.id,
+          kind: 'strip',
+          reason: 'screens',
+          detail: { pageType: screenPageType ?? null },
+        });
+        continue;
+      }
+      const inSegment = inSegmentById.get(widget.id) !== false;
       if (!inSegment) {
         this.log(`Recommendation strip outside segment targeting: ${widget.id}`);
+        rejections.push(
+          this.consentAllows('personalization')
+            ? { id: widget.id, kind: 'strip', reason: 'segment' }
+            : {
+                id: widget.id,
+                kind: 'strip',
+                reason: 'consent',
+                detail: { channel: 'personalization', awaiting: this.isAwaitingConsent() },
+              }
+        );
         continue;
       }
       visible.push(widget);
     }
+    // The first step of a screen's strips: what an earlier pass said is stale, the arm
+    // and cap steps that follow (`StripService`) add theirs.
+    this.notShown.replace('decision', 'strip', screen, rejections);
     return visible;
   }
 
@@ -915,6 +1578,10 @@ export class Selwise {
     gate: ExperimentGate = this.experiments
   ): RecommendationArm {
     const id = String(widgetId ?? '').trim();
+    // The strip a screen experiment's point is drawing right now is its arm's:
+    // its exposure and its clicks are the experiment's (`registerSlotArmStrip`).
+    const atPoint = this.slotArmStrips.get(id);
+    if (atPoint) return atPoint;
     return resolveRecommendationArm(gate, id, listed ?? this.listedWidgets.get(id) ?? null);
   }
 
@@ -930,7 +1597,7 @@ export class Selwise {
    * while no arm has an audience.
    */
   private stripGate(): Promise<ExperimentGate> {
-    const behavior = this.withConsentSignals(withCartSignals(undefined, this.cart.get()));
+    const behavior = this.withOwnSignals(withCartSignals(undefined, this.cart.get()));
     return this.experiments.forScreen({
       pageUrl: this.currentPageUrl ?? '',
       deviceType: 'mobile',
@@ -947,7 +1614,7 @@ export class Selwise {
    * have no screen to judge on, and a click must be recorded against the
    * answer the shopper is looking at — never re-resolved against a different
    * one. Hosts that report the drawn id (`result.widgetId`, the hook's and
-   * the App Maker strips' choice) get exactly the strip's own verdict.
+   * the ready-made strips' choice) get exactly the strip's own verdict.
    */
   private readonly stripArms = new Map<string, RecommendationArm>();
 
@@ -958,7 +1625,115 @@ export class Selwise {
 
   /** What a track call is recorded against: the strip's answered verdict, else the arms without an audience. */
   private trackedArm(widgetId: string): RecommendationArm {
-    return this.stripArms.get(String(widgetId ?? '').trim()) ?? this.recommendationArm(widgetId);
+    const id = String(widgetId ?? '').trim();
+    return this.slotArmStrips.get(id) ?? this.stripArms.get(id) ?? this.recommendationArm(widgetId);
+  }
+
+  // ---- screen experiments ----
+
+  /** Bumped whenever the visitor's arms are dropped (`on('experiments')`). */
+  private experimentsVersion = 0;
+  /**
+   * The strips that screen experiments' points are drawing now, by strip id,
+   * each as the arm that draws it. Present only while a `<SelwiseSlot>` shows the
+   * strip (`registerSlotArmStrip`), so the same strip drawn natively elsewhere is
+   * not attributed to the experiment.
+   */
+  private readonly slotArmStrips = new Map<string, RecommendationArm>();
+
+  /**
+   * The page type a screen is judged as: the one the host passed with
+   * `setScreen` when `screen` is the screen it last named, otherwise the
+   * catalogue's type for the address (`app://basket` is a `cart`). Undefined for
+   * an address the catalogue does not know, which targeting lets through.
+   */
+  private pageTypeOfScreen(screen: string | null | undefined): string | undefined {
+    const named = appScreenOfUrl(screen);
+    const onCurrent = !!named && appScreenOfUrl(this.currentPageUrl)?.url === named.url;
+    return (onCurrent ? (this.screenState.pageType ?? named?.pageType) : named?.pageType) ?? undefined;
+  }
+
+  /**
+   * The arms a point on `screen` may enter, judged as a strip on that screen is
+   * (`stripGate`) but on the screen the POINT is on, which a screen that stays
+   * mounted behind another is not the one the host last named.
+   */
+  private slotGate(screen: string): Promise<ExperimentGate> {
+    const behavior = this.withOwnSignals(withCartSignals(undefined, this.cart.get()));
+    const pageType = this.pageTypeOfScreen(screen);
+    return this.experiments.forScreen({
+      pageUrl: screen,
+      ...(pageType ? { pageType } : {}),
+      deviceType: 'mobile',
+      ...(this.remote?.country ? { country: this.remote.country } : {}),
+      ...(behavior ? { behavior } : {}),
+      testMode: this.testMode,
+      segments: this.segments,
+    });
+  }
+
+  /**
+   * The visitor's arm of the screen experiment that owns a POINT of a screen
+   * (`<SelwiseSlot screen slot>` asks), or `null` when none does — the point is
+   * then drawn as its own targeting says. The arm carries the module to draw
+   * (`arm.module`, `none` for the arm that shows nothing) and the module's data.
+   *
+   * Nothing is counted here: resolving is not showing. The exposure is recorded
+   * when the point is on the shopper's screen (`trackScreenSlotExposure`), the
+   * same moment for every arm, the one that shows nothing included. Waits for
+   * the visitor's arms (one request per launch, shared with every other reader).
+   */
+  async resolveScreenSlot(screen: string, slot: string): Promise<ScreenSlotArm | null> {
+    this.assertReady();
+    if (await this.controlGroupDecided()) return null;
+    await this.loadExperiments();
+    const gate = await this.slotGate(screen);
+    return screenSlotArmAt(gate.screenSlotAssignments(), screen, slot);
+  }
+
+  /**
+   * The point is on the shopper's screen (visible, with the app in front): the
+   * arm's exposure, once per arm per process — the denominator of every rate on
+   * the experiment's results page. Never in test mode (a QA link forces arms and
+   * counts nothing) and only with consent to experiments.
+   */
+  trackScreenSlotExposure(arm: Pick<ScreenSlotArm, 'assignment'>): void {
+    if (!this.initialized || this.destroyed) return;
+    this.recordExperimentExposure(arm.assignment);
+  }
+
+  /** A tap on the arm's module (a strip's product, a campaign's button, a block's link): the arm's click goal. */
+  trackScreenSlotClick(arm: Pick<ScreenSlotArm, 'assignment'>): void {
+    if (!this.initialized || this.destroyed) return;
+    this.recordExperimentClick(arm.assignment);
+  }
+
+  /**
+   * A point is drawing this arm's strip: until the returned function is called,
+   * the strip's impressions and clicks are recorded under the experiment (the
+   * strip's arm is the screen experiment's, whatever the strip's own experiments
+   * say). Returns the release.
+   */
+  registerSlotArmStrip(arm: ScreenSlotArm): () => void {
+    const summary = slotArmStrip(arm);
+    if (!summary) return () => undefined;
+    const slotArm: RecommendationArm = {
+      widgetId: summary.id,
+      sourceWidgetId: summary.id,
+      widget: summary,
+      experiment: { experimentId: arm.experimentId, variantId: arm.variantId },
+      hidden: false,
+      ...(arm.assignment.liveCartRequired === true ? { liveCartRequired: true } : {}),
+      assignment: arm.assignment,
+      strategyOverridden: false,
+    };
+    this.slotArmStrips.set(summary.id, slotArm);
+    return () => {
+      if (this.slotArmStrips.get(summary.id) === slotArm) this.slotArmStrips.delete(summary.id);
+      // The strip's own answer was remembered with the arm's verdict: forget it,
+      // or a click on the same strip drawn natively would still be the experiment's.
+      if (this.stripArms.get(summary.id) === slotArm) this.stripArms.delete(summary.id);
+    };
   }
 
   /**
@@ -1206,8 +1981,8 @@ export class Selwise {
    * a merchant's banner set does not change between two screens, and refetching
    * per navigation would put a request on every screen transition.
    *
-   * Returns DATA, not UI. What each type looks like belongs to the host app,
-   * which already owns its own themed components.
+   * Returns DATA, not UI: `<SelwiseSurfaces />` from `@selwise/react-native/ui`
+   * draws it, and a host that wants its own look draws it from this.
    *
    * The words are already chosen: a campaign's content STATE is applied
    * (`surface.content` is the winning state's, `surface.stateId` names it),
@@ -1247,12 +2022,23 @@ export class Selwise {
       this.log(`Loaded ${this.surfaces.length} surface(s)`);
     }
 
+    const screen = pageUrl ?? this.currentPageUrl ?? '';
+    // What `explain()` will say about this pass: every surface left out, and the
+    // condition that left it out, written where that condition is evaluated.
+    const rejections: NotShownInput[] = [];
+    const reject = (surface: Surface, reason: AppExplainReason, detail?: NotShownDetail): void => {
+      rejections.push({ id: surface.id, kind: 'campaign', type: surface.type, reason, ...(detail ? { detail } : {}) });
+    };
+
     // A control-group visitor is shown no campaign on any screen.
-    if (this.inControlGroup()) return [];
+    if (this.inControlGroup()) {
+      for (const surface of this.surfaces) reject(surface, 'control_group');
+      this.notShown.replace('decision', 'campaign', screen, rejections);
+      return [];
+    }
 
     await this.loadExperiments();
 
-    const screen = pageUrl ?? this.currentPageUrl ?? '';
     const cart = this.cart.get();
     const onScreenProduct = normalizeProductInput(product);
     // The host's own behaviour snapshot, with the two cart signals filled from
@@ -1262,7 +2048,7 @@ export class Selwise {
     // product it passed. Without a known product they stay absent, and a rule
     // on an absent product signal does not match: a campaign targeted at "stock
     // below 5" is never returned on a screen whose stock nobody measured.
-    const behavior = this.withConsentSignals(
+    const behavior = this.withOwnSignals(
       withProductSignals(withCartSignals(targetingContext.behavior, cart), onScreenProduct),
     );
     const deviceType = targetingContext.deviceType ?? 'mobile';
@@ -1284,22 +2070,40 @@ export class Selwise {
       testMode: this.testMode,
       segments: this.segments,
     });
-    const candidates = this.withVariantModules(this.surfaces, arms);
-    const onScreen = selectSurfaces(candidates, {
-      ...targetingContext,
-      ...(behavior ? { behavior } : {}),
-      pageUrl: screen,
-      deviceType,
-      ...(country ? { country } : {}),
-      testMode: this.testMode,
-      dismissedIds: this.dismissals.heldIds(candidates),
-    });
+    // A screen experiment owns its point: the campaigns sent there natively are
+    // withheld from the visitors it counts and the arm's own campaign is added
+    // (`applyScreenSlotArms`).
+    const candidates = applyScreenSlotArms(
+      this.withVariantModules(this.surfaces, arms),
+      screenSlotArmsOn(arms.screenSlotAssignments(), screen)
+    );
+    const onScreen = selectSurfaces(
+      candidates,
+      {
+        ...targetingContext,
+        ...(behavior ? { behavior } : {}),
+        pageUrl: screen,
+        deviceType,
+        ...(country ? { country } : {}),
+        testMode: this.testMode,
+        dismissedIds: this.dismissals.heldIds(candidates),
+      },
+      (surface, reason) => reject(surface, reason)
+    );
     const contentContext = {
       behavior,
       cart,
       product: onScreenProduct,
       format: { ...(locale ? { locale } : {}), currency: this.remote?.currency ?? null },
     };
+
+    // The segments of every surface that reaches that step, asked in ONE request.
+    const audienceCandidates = onScreen.filter((surface) => arms.shouldRenderTarget(surface.id));
+    const audienceVerdicts = await this.segments.shouldShowMany(
+      audienceCandidates.map((surface) => ({ mode: surface.segmentTargetingMode, segmentIds: surface.segmentIds })),
+      { pageUrl: screen }
+    );
+    const inSegmentById = new Map(audienceCandidates.map((surface, index) => [surface.id, audienceVerdicts[index]] as const));
 
     const eligible: Surface[] = [];
     for (const surface of onScreen) {
@@ -1308,20 +2112,25 @@ export class Selwise {
       // render alongside it), then segments, then empty content.
       if (!arms.shouldRenderTarget(surface.id)) {
         this.log(`Surface excluded by experiment: ${surface.id}`);
+        const arm = arms.forTarget(surface.id);
+        reject(surface, 'experiment_arm', arm ? { experimentId: arm.experimentId, variantId: arm.variantId } : undefined);
         continue;
       }
 
-      const inSegment = await this.segments.shouldShow(
-        surface.segmentTargetingMode,
-        surface.segmentIds,
-        { pageUrl: screen }
-      );
+      const inSegment = inSegmentById.get(surface.id) !== false;
       if (!inSegment) {
         this.log(`Surface outside segment targeting: ${surface.id}`);
+        // Without the consent that lets segments be read the visitor is in none: say that, not "you are not in it".
+        reject(
+          surface,
+          this.consentAllows('personalization') ? 'segment' : 'consent',
+          this.consentAllows('personalization') ? undefined : { channel: 'personalization', awaiting: this.isAwaitingConsent() }
+        );
         continue;
       }
 
       if (Object.keys(surface.content).length === 0 && !surface.customCss && !surface.customJs) {
+        reject(surface, 'content', { cause: 'empty' });
         continue;
       }
 
@@ -1331,6 +2140,7 @@ export class Selwise {
       const shaped = resolveSurfaceContent(this.applyExperiment(surface, arms), contentContext);
       if (!shaped) {
         this.log(`Surface not drawable for this shopper now (content state or unfillable value): ${surface.id}`);
+        reject(surface, 'content', { cause: 'state_or_value' });
         continue;
       }
 
@@ -1340,6 +2150,10 @@ export class Selwise {
     // Caps AFTER conflict resolution: a surface the resolver rejected was never
     // shown, so spending its allowance would be wrong.
     const resolved = resolveConflicts(eligible);
+    const resolvedIds = new Set(resolved.map((surface) => surface.id));
+    for (const surface of eligible) {
+      if (!resolvedIds.has(surface.id)) reject(surface, 'conflict');
+    }
     const sessionId = this.identity.getSessionId();
 
     const selected = resolved.filter((surface) => {
@@ -1348,12 +2162,17 @@ export class Selwise {
       const blocked = this.caps.blockedBy(capKey, surface.placement.frequencyCap, sessionId);
       if (blocked) {
         this.log(`Surface blocked by frequency cap (${blocked}): ${surface.id}`);
+        reject(surface, 'frequency_cap', { window: blocked });
         return false;
       }
       return true;
     });
 
-    return this.settleExperiments(selected, sessionId, arms);
+    const settled = this.settleExperiments(selected, sessionId, arms, (surface, experimentId) =>
+      reject(surface, 'experiment_holdout', { experimentId })
+    );
+    this.notShown.replace('decision', 'campaign', screen, rejections);
+    return settled;
   }
 
   /**
@@ -1374,7 +2193,12 @@ export class Selwise {
    * place". No impression, click or cap charge is ever made for it — the host
    * never receives it — except the would-be display on its own cap key.
    */
-  private settleExperiments(surfaces: Surface[], sessionId: string, arms: ExperimentGate): Surface[] {
+  private settleExperiments(
+    surfaces: Surface[],
+    sessionId: string,
+    arms: ExperimentGate,
+    onHeldOut: (surface: Surface, experimentId: string) => void = () => undefined
+  ): Surface[] {
     const kept: Surface[] = [];
     for (const surface of surfaces) {
       const assignment = surface.experiment ? arms.forTarget(surface.id) : null;
@@ -1385,6 +2209,7 @@ export class Selwise {
           void this.caps.recordShown(heldOutCapKey(surface.id), sessionId).catch(() => undefined);
         }
         this.log(`Surface held out by experiment ${assignment.experimentId}: ${surface.id}`);
+        onHeldOut(surface, assignment.experimentId);
         continue;
       }
       kept.push(surface);
@@ -1401,7 +2226,7 @@ export class Selwise {
     // as for a visitor outside every experiment — and their id is not sent.
     return this.experiments.load(() =>
       this.consentAllows('experimentEvents')
-        ? this.endpointsApi.getExperimentAssignments(this.identity.getVisitorId())
+        ? this.endpointsApi.getExperimentAssignments(this.identity.getVisitorId(), undefined, this.qaVariants)
         : Promise.resolve({})
     );
   }
@@ -1426,6 +2251,29 @@ export class Selwise {
         // visitor missing from the sample, never an error for the host.
         this.exposedArms.delete(key);
         this.log('Could not record an experiment exposure', error);
+      });
+  }
+
+  /**
+   * One click on a tested surface or strip, for the arm's click goal. Every tap
+   * is sent (the results page counts clicks, and distinct clickers from the
+   * visitor id), never in test mode and only with the visitor's consent to
+   * experiments — the same gates as the exposure. The API requires the channel's
+   * key for an app, which the transport sends. Fail-soft: a lost click is a
+   * lower count, never an error for the host.
+   */
+  private recordExperimentClick(arm: { experimentId: string; variantId: string }): void {
+    if (this.testMode) return;
+    if (!this.consentAllows('experimentEvents')) return;
+    void this.endpointsApi
+      .trackExperimentEvent({
+        experimentId: arm.experimentId,
+        variantId: arm.variantId,
+        eventType: 'click',
+        visitorId: this.identity.getVisitorId(),
+      })
+      .catch((error) => {
+        this.log('Could not record an experiment click', error);
       });
   }
 
@@ -1532,6 +2380,8 @@ export class Selwise {
       this.configPromise = this.endpointsApi
         .getConfig()
         .then((config) => {
+          this.configLoadedAt = Date.now();
+          this.configSignature = JSON.stringify(config ?? null);
           this.applyRemoteConfig(config);
           return config;
         })
@@ -1546,9 +2396,53 @@ export class Selwise {
     return this.configPromise;
   }
 
+  /**
+   * Read `/config` again when the copy in hand is older than
+   * `CONFIG_REFRESH_AFTER_MS`: a campaign published while the app is open then
+   * appears on the next screen instead of after a relaunch.
+   *
+   * Called when the app returns to the foreground and when the screen changes.
+   * Never awaited and never in front of a draw — surfaces keep drawing from the
+   * copy they have until the new one lands. A failure keeps the old copy and
+   * waits `CONFIG_RETRY_AFTER_MS`. When the answer differs, what was cached from
+   * the old one is dropped and `on('config')` fires, so drawn components ask again.
+   */
+  private refreshRemoteConfigIfStale(): void {
+    if (!this.initialized || this.destroyed) return;
+    // The first read is still on its way: it is the fresh one.
+    if (this.configPromise && this.configLoadedAt === 0) return;
+    if (Date.now() - this.configLoadedAt < CONFIG_REFRESH_AFTER_MS) return;
+    void this.configRefresh.run('config', () => this.refreshRemoteConfig());
+  }
+
+  private async refreshRemoteConfig(): Promise<void> {
+    try {
+      const config = await this.endpointsApi.getConfig();
+      if (this.destroyed) return;
+      this.configLoadedAt = Date.now();
+      const signature = JSON.stringify(config ?? null);
+      if (signature === this.configSignature) return;
+      this.configSignature = signature;
+      this.applyRemoteConfig(config);
+      // The next `getSurfaces()` reads the new list from here, without a request.
+      this.configPromise = Promise.resolve(config);
+      this.surfaces = null;
+      this.invalidateEnrichment();
+      this.searchService?.invalidate();
+      this.stripService?.invalidate();
+      this.log('/config changed: surfaces and strips are asked again');
+      this.emitter.emit('config', ++this.configVersion);
+    } catch (error) {
+      this.log('Could not re-read /config', error);
+      this.configLoadedAt = Math.max(this.configLoadedAt, Date.now() - CONFIG_REFRESH_AFTER_MS + CONFIG_RETRY_AFTER_MS);
+    }
+  }
+
   private applyRemoteConfig(config: Record<string, unknown> | null): void {
     const remote = normalizeRemoteConfig(config);
+    const themeBefore = JSON.stringify(this.remote?.theme ?? {});
     this.remote = remote;
+    if (JSON.stringify(remote.theme ?? {}) !== themeBefore) this.emitter.emit('theme', this.getTheme());
     this.consent.setRequiresDecision(remote.consentRequired);
     if (remote.consentRequired && this.consent.isUndecided()) {
       this.log(
@@ -1641,6 +2535,10 @@ export class Selwise {
     if (this.http.getLocale() === previous) return;
     this.invalidateSurfaces();
     this.invalidateEnrichment();
+    // The search labels and behaviour are the merchant's text too: read again.
+    this.searchService?.invalidate();
+    this.stripService?.invalidate();
+    this.emitter.emit('locale', this.http.getLocale());
   }
 
   /** The language passed to `init({ locale })` or `setLocale`, if any. */
@@ -1652,6 +2550,7 @@ export class Selwise {
   invalidateSurfaces(): void {
     this.surfaces = null;
     this.configPromise = null;
+    this.searchService?.invalidate();
   }
 
   /**
@@ -1680,23 +2579,44 @@ export class Selwise {
    * the name that reads better, is not in CANONICAL_EVENTS — the ingest
    * pipeline would have dropped it with no error anywhere.
    */
-  trackSurfaceView(surface: Pick<Surface, 'id' | 'kind' | 'type'>): void {
+  trackSurfaceView(
+    surface: Pick<Surface, 'id' | 'kind' | 'type' | 'scenario'>,
+    /**
+     * `basis: 'visible'` — the host counted this impression when the surface was
+     * SEEN (an overlay drawn while the app is in front, a point on screen), not
+     * when it was fetched. The dashboard withholds a click rate over a window
+     * that mixes the two bases, and can only do that when the event says which
+     * it is (the browser widget sends the same `impressionBasis`).
+     */
+    options: { basis?: 'visible' } = {}
+  ): void {
     this.track('impression', {
       entityType: 'campaign',
       entityId: surface.id,
-      metadata: { surfaceType: surface.type },
+      metadata: {
+        surfaceType: surface.type,
+        ...scenarioMetadata(surface.scenario),
+        ...(options.basis === 'visible' ? { impressionBasis: 'visible' } : {}),
+      },
     });
   }
 
+  /**
+   * A tap on the surface, as the `click` the reports count — and, when the
+   * surface is the tested one of an experiment, the arm's CLICK GOAL: the
+   * experiment's results page counts it per variant (`POST /experiments/track`,
+   * `eventType: 'click'`).
+   */
   trackSurfaceClick(
-    surface: Pick<Surface, 'id' | 'kind' | 'type'>,
+    surface: Pick<Surface, 'id' | 'kind' | 'type' | 'scenario'> & Partial<Pick<Surface, 'experiment'>>,
     metadata?: TrackOptions['metadata']
   ): void {
     this.track('click', {
       entityType: 'campaign',
       entityId: surface.id,
-      metadata: { surfaceType: surface.type, ...(metadata ?? {}) },
+      metadata: { surfaceType: surface.type, ...scenarioMetadata(surface.scenario), ...(metadata ?? {}) },
     });
+    if (surface.experiment) this.recordExperimentClick(surface.experiment);
   }
 
   /**
@@ -1707,13 +2627,13 @@ export class Selwise {
    * next navigation re-evaluates the same list.
    */
   async dismissSurface(
-    surface: Pick<Surface, 'id' | 'kind' | 'type' | 'content' | 'styles' | 'customCss' | 'customJs' | 'rawPlacement'>,
+    surface: Pick<Surface, 'id' | 'kind' | 'type' | 'content' | 'styles' | 'customCss' | 'customJs' | 'rawPlacement' | 'scenario'>,
   ): Promise<void> {
     this.assertReady();
     this.track('close', {
       entityType: 'campaign',
       entityId: surface.id,
-      metadata: { surfaceType: surface.type },
+      metadata: { surfaceType: surface.type, ...scenarioMetadata(surface.scenario) },
     });
     // How long the close holds is the surface's own `afterClose` (this
     // session by default, or a number of days that survives a relaunch).
@@ -1728,27 +2648,61 @@ export class Selwise {
    */
   async subscribeNewsletter(
     email: string,
-    extra: { fullName?: string; locale?: string; surfaceId?: string } = {}
+    extra: {
+      fullName?: string;
+      locale?: string;
+      surfaceId?: string;
+      /**
+       * An SMS opt-in, as on the web form: the number AND the shopper's own tick on
+       * the consent line. A number without `smsConsent` is not sent — typing a
+       * phone number is not consent to be texted.
+       */
+      phone?: string;
+      smsConsent?: boolean;
+      /**
+       * The consent wording the form showed next to the field, exactly as shown,
+       * and the version of that wording: the opt-in's evidence (a permission with
+       * no wording is a claim, not a record). The components send them.
+       */
+      consentText?: string;
+      consentTextVersion?: string;
+      /** The screen the form was on. Defaults to the screen the host last named. */
+      sourcePath?: string;
+    } = {}
   ): Promise<{ success: boolean }> {
     this.assertReady();
+    const phone = extra.smsConsent && extra.phone ? extra.phone.trim() : '';
+    // The API's bounds (a longer value is a 400 that would lose the signup).
+    const consentText = (extra.consentText ?? '').trim().slice(0, 1000);
+    const sourcePath = extra.sourcePath ?? this.currentPageUrl;
 
     const siteUserId = this.identity.getSiteUserId();
     const response = await this.endpointsApi.subscribeNewsletter({
       email,
       ...(extra.fullName ? { fullName: extra.fullName } : {}),
+      ...(phone ? { phone, channels: ['email', 'sms'] as Array<'email' | 'sms'> } : {}),
       ...(extra.locale ? { locale: extra.locale } : {}),
       visitorId: this.identity.getVisitorId(),
       ...(siteUserId ? { siteUserId } : {}),
-      ...(this.currentPageUrl ? { sourcePath: this.currentPageUrl } : {}),
+      ...(sourcePath ? { sourcePath } : {}),
+      ...(consentText ? { consentText } : {}),
+      ...(consentText && extra.consentTextVersion
+        ? { consentTextVersion: extra.consentTextVersion.slice(0, 40) }
+        : {}),
     });
 
-    this.track('user_signup', {
-      entityType: extra.surfaceId ? 'campaign' : 'custom',
-      ...(extra.surfaceId ? { entityId: extra.surfaceId } : {}),
-      metadata: { channel: 'newsletter' },
-    });
+    const success = response?.success !== false && !response?.error;
+    // A signup the server did not accept is not a conversion: the event used to be
+    // recorded before the answer was read, so a rejected address still counted.
+    if (success) {
+      this.track('user_signup', {
+        entityType: extra.surfaceId ? 'campaign' : 'custom',
+        ...(extra.surfaceId ? { entityId: extra.surfaceId } : {}),
+        metadata: { channel: 'newsletter' },
+      });
+    }
 
-    return { success: response?.success !== false && !response?.error };
+    return { success };
   }
 
   /** Clears every remembered dismissal. For a merchant testing their own app. */
@@ -1768,7 +2722,18 @@ export class Selwise {
    * (`ExperimentManager.trackImpression`) and the same for every arm, so the
    * comparison is like for like. Never in test mode.
    */
-  trackRecommendationImpression(widgetId: string, productItemCodes: string[] = []): void {
+  trackRecommendationImpression(
+    widgetId: string,
+    productItemCodes: string[] = [],
+    /**
+     * `basis: 'visible'` — the host counted this impression when the strip was
+     * SEEN (on screen, the card half visible), not when it was drawn. The dashboard
+     * withholds a click rate over a window that mixes the two bases, and can only
+     * do that when the event says which it is (the browser widget sends the same
+     * `impressionBasis`). Leave it out when the host counts at the draw.
+     */
+    options: { basis?: 'visible' } = {}
+  ): void {
     if (!this.initialized || this.destroyed) return;
     const arm = this.trackedArm(widgetId);
     if (arm.hidden) {
@@ -1778,7 +2743,10 @@ export class Selwise {
     this.track('widget_impression', {
       entityType: 'recommendation',
       entityId: arm.widgetId,
-      metadata: { productCount: productItemCodes.length },
+      metadata: {
+        productCount: productItemCodes.length,
+        ...(options.basis === 'visible' ? { impressionBasis: 'visible' } : {}),
+      },
     });
     if (arm.assignment) this.recordExperimentExposure(arm.assignment);
   }
@@ -1800,7 +2768,63 @@ export class Selwise {
       productItemCode: itemCode,
       metadata: position === undefined ? { widgetId: drawnId } : { widgetId: drawnId, position },
     });
-    if (arm.assignment) this.recordExperimentExposure(arm.assignment);
+    if (arm.assignment) {
+      this.recordExperimentExposure(arm.assignment);
+      this.recordExperimentClick(arm.assignment);
+    }
+  }
+
+  /**
+   * `add_to_cart` from a recommendation strip: a product the shopper added from
+   * the strip, which is what credits the strip with the add (the same event the
+   * browser widget writes under the strip's id). Reported for an add the host's
+   * basket took — never for one it refused.
+   */
+  trackRecommendationAddToCart(widgetId: string, itemCode: string, metadata?: TrackOptions['metadata']): void {
+    if (!this.initialized || this.destroyed) return;
+    const arm = this.trackedArm(widgetId);
+    if (arm.hidden || !itemCode) return;
+    this.track('add_to_cart', {
+      entityType: 'recommendation',
+      entityId: arm.widgetId,
+      productItemCode: itemCode,
+      ...(metadata ? { metadata } : {}),
+    });
+  }
+
+  /**
+   * One "add all" press on a look: what was asked and what each line came to
+   * (`requested`, `added`, `failed`, `needsSize`), the figure the strip's add-all
+   * button is judged by.
+   */
+  trackRecommendationAddAll(
+    widgetId: string,
+    outcome: { requested: number; added: number; failed: number; needsSize: number }
+  ): void {
+    if (!this.initialized || this.destroyed) return;
+    const arm = this.trackedArm(widgetId);
+    if (arm.hidden) return;
+    this.track('cart_add_all', {
+      entityType: 'recommendation',
+      entityId: arm.widgetId,
+      metadata: { ...outcome, platform: 'app' },
+    });
+  }
+
+  /**
+   * Whether a strip's frequency cap (`triggerConfig.frequencyCap`) keeps it off
+   * this screen: null when it may be drawn, else the rule that blocked it.
+   * The ledger is the surfaces' (`FrequencyCapStore`), counted on this device.
+   */
+  recommendationCapBlock(widgetId: string, cap: FrequencyCapConfig | null | undefined): keyof FrequencyCapConfig | null {
+    if (!this.initialized || this.destroyed) return null;
+    return this.caps.blockedBy(`display:recommendation:${widgetId}`, cap, this.identity.getSessionId());
+  }
+
+  /** A capped strip was SHOWN (seen): spend its allowance. A strip with no cap costs nothing. */
+  async recordRecommendationShown(widgetId: string, cap: FrequencyCapConfig | null | undefined): Promise<void> {
+    if (!this.initialized || this.destroyed || !cap || Object.keys(cap).length === 0) return;
+    await this.caps.recordShown(`display:recommendation:${widgetId}`, this.identity.getSessionId());
   }
 
   // ---- product enrichment ----
@@ -1814,7 +2838,7 @@ export class Selwise {
    * name the merchant types in the dashboard) and receives markup the server
    * has already interpolated, sanitized and scoped.
    *
-   * Returns DATA. The Akinon plugin renders it in an isolated WebView with
+   * Returns DATA. `<SelwiseEnrichment />` renders it in the app's WebView with
    * height reporting; a host doing its own rendering gets `item.html` and
    * `item.css` and puts them wherever it likes.
    *
@@ -1887,6 +2911,123 @@ export class Selwise {
    * `shown` marks the delivery locally too, so a failed acknowledgement cannot
    * make the same reminder reappear on the next foreground.
    */
+  /**
+   * The scenario claims that can be drawn on THIS screen, as surfaces — the app
+   * counterpart of the browser widget's inbox pass, in its order and with its
+   * rules, so a host that draws surfaces draws these the same way.
+   *
+   * A claim becomes one of three things:
+   *
+   * - **drawn here** — returned, with the step's merge fields laid over its
+   *   content and the scenario's ids on it (`surface.scenario`), so its
+   *   impression and click credit the scenario;
+   * - **not for this screen, yet** — left OPEN and not returned: its page rules,
+   *   test mode or words do not fit this screen, and a later screen inside the
+   *   claim's lifetime may (the web keeps such a visitor "on hold" the same way);
+   * - **never** — closed at once with its reason: the campaign is gone
+   *   (`entity_missing`), a public campaign's own audience refused this visitor
+   *   (`audience_mismatch`) or the step's frequency cap blocked it
+   *   (`frequency_cap`). Reported, so the scenario report can say why nobody saw it.
+   *
+   * The host reports `shown` with `acknowledgeScenarioDeliveries` when it draws one
+   * (`<SelwiseSurfaces />` does). The inbox is asked at most once a minute; pass
+   * `refresh: true` when the app comes to the foreground.
+   */
+  async getScenarioSurfaces(
+    pageUrl?: string,
+    context: {
+      pageType?: string;
+      deviceType?: SurfaceFilter['deviceType'];
+      product?: ProductInput | null;
+    } = {},
+    options: { refresh?: boolean } = {}
+  ): Promise<ScenarioSurface[]> {
+    this.assertReady();
+    const claims = await this.scenarioInboxEntries(Boolean(options.refresh));
+    if (claims.length === 0) return [];
+
+    if (!this.surfaces) {
+      const config = await this.loadRemoteConfig();
+      this.surfaces = config ? normalizeSurfaces(config) : [];
+    }
+
+    const screen = pageUrl ?? this.currentPageUrl ?? '';
+    const cart = this.cart.get();
+    const product = normalizeProductInput(context.product);
+    const behavior = this.withOwnSignals(withProductSignals(withCartSignals(undefined, cart), product));
+    const sessionId = this.identity.getSessionId();
+    const contentContext = {
+      behavior,
+      cart,
+      product,
+      format: { currency: this.remote?.currency ?? null },
+    };
+
+    const drawable: ScenarioSurface[] = [];
+    const closed: ScenarioInboxAcknowledgement[] = [];
+    const close = (entry: ScenarioInboxEntry, outcome: ScenarioInboxAcknowledgement['outcome']) =>
+      closed.push({ deliveryId: entry.deliveryId, outcome });
+
+    for (const entry of claims) {
+      if (!entry.available) {
+        close(entry, 'suppressed:entity_missing');
+        continue;
+      }
+      const base = entry.scenarioOnly
+        ? normalizeSurface(entry.campaign, 'campaign')
+        : (this.surfaces ?? []).find((surface) => surface.id === entry.campaignId) ?? null;
+      if (!base) {
+        close(entry, 'suppressed:entity_missing');
+        continue;
+      }
+      const personalised: Surface = {
+        ...base,
+        content: { ...base.content, ...entry.tokens },
+        scenario: {
+          scenarioId: entry.scenarioId,
+          runId: entry.runId,
+          nodeId: entry.nodeId,
+          deliveryId: entry.deliveryId,
+        },
+      };
+
+      // The campaign's own rules for THIS screen; a miss leaves the claim open.
+      const [matched] = selectSurfaces([personalised], {
+        pageUrl: screen,
+        deviceType: context.deviceType ?? 'mobile',
+        ...(context.pageType ? { pageType: context.pageType } : {}),
+        ...(this.remote?.country ? { country: this.remote.country } : {}),
+        ...(behavior ? { behavior } : {}),
+        testMode: this.testMode,
+      });
+      if (!matched) continue;
+
+      // A scenario campaign has no audience of its own: the scenario admitted this
+      // shopper. A PUBLIC campaign keeps its own, and a refusal there is its own reason.
+      if (
+        !entry.scenarioOnly &&
+        !(await this.segments.shouldShow(personalised.segmentTargetingMode, personalised.segmentIds, {
+          pageUrl: screen,
+        }))
+      ) {
+        close(entry, 'suppressed:audience_mismatch');
+        continue;
+      }
+
+      const shaped = resolveSurfaceContent(personalised, contentContext);
+      if (!shaped) continue;
+
+      if (entry.respectFrequencyCaps && this.caps.blockedBy(shaped.id, shaped.placement.frequencyCap, sessionId)) {
+        close(entry, 'suppressed:frequency_cap');
+        continue;
+      }
+      drawable.push({ deliveryId: entry.deliveryId, surface: shaped });
+    }
+
+    if (closed.length > 0) void this.acknowledgeScenarioDeliveries(closed);
+    return drawable;
+  }
+
   async acknowledgeScenarioDeliveries(
     acknowledgements: ReadonlyArray<ScenarioInboxAcknowledgement>,
     signal?: AbortSignal
@@ -1897,6 +3038,15 @@ export class Selwise {
 
     for (const ack of acknowledgements) {
       if (ack.outcome === 'shown') this.scenarioSeen.add(ack.deliveryId);
+    }
+    // A claim the host has answered is closed server-side; keeping it here would
+    // draw it again on the next screen.
+    if (this.scenarioClaims) {
+      const answered = new Set(acknowledgements.map((ack) => ack.deliveryId));
+      this.scenarioClaims = {
+        ...this.scenarioClaims,
+        entries: this.scenarioClaims.entries.filter((entry) => !answered.has(entry.deliveryId)),
+      };
     }
 
     await this.endpointsApi
@@ -1911,7 +3061,13 @@ export class Selwise {
   async getEnrichment(
     code: string,
     slots: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /**
+     * `probe`: the caller asks speculatively (a `<SelwiseSlot>` draws whatever
+     * enrichment happens to carry its name). An empty answer is then the ordinary
+     * case, not something `explain()` should list.
+     */
+    options: { probe?: boolean } = {}
   ): Promise<EnrichmentResult> {
     this.assertReady();
 
@@ -1919,12 +3075,22 @@ export class Selwise {
     const keys = normalizePlacementKeys(slots ?? []);
     if (!productCode || keys.length === 0) return { ...EMPTY_ENRICHMENT, code: productCode };
     // Decided before asking. Once the channel's config is in, a channel with no
-    // enrichment — the module is not in its plan, or no rule is live — answers
-    // no product screen with anything but an error or an empty list, so the
-    // request is not sent. Before the config lands the answer is not known, and
-    // the request goes out as it always did.
-    if (this.remote && !this.remote.hasEnrichment) return { ...EMPTY_ENRICHMENT, code: productCode };
-    if (await this.controlGroupDecided()) return { ...EMPTY_ENRICHMENT, code: productCode };
+    // enrichment — the module is not in its plan, or no rule is live — answers no
+    // product screen with anything but an error or an empty list, so the request
+    // is not sent. Before the config lands the answer is not known, and the
+    // request goes out as it always did.
+    //
+    // The decision is recorded per slot (`explain()`): it used to be silent, and a
+    // merchant whose block was not on the screen had nothing to read.
+    const known = this.remote?.enrichmentSlots ?? [];
+    if (this.remote && !this.remote.hasEnrichment) {
+      if (!options.probe) for (const key of keys) this.noteEnrichment(key, 'unknown_slot', { known: '' });
+      return { ...EMPTY_ENRICHMENT, code: productCode };
+    }
+    if (await this.controlGroupDecided()) {
+      for (const key of keys) this.noteEnrichment(key, 'control_group');
+      return { ...EMPTY_ENRICHMENT, code: productCode };
+    }
 
     // The stamp comes from `/config`, so a screen that renders before the
     // bootstrap lands simply misses the cache once rather than serving stale
@@ -1948,21 +3114,46 @@ export class Selwise {
     }
 
     const visible: EnrichmentItem[] = [];
-    for (const item of selectByTestMode(result.items, this.testMode)) {
-      const inSegment = await this.segments.shouldShow(
-        item.segmentTargetingMode,
-        item.segmentIds,
-        { pageUrl: this.currentPageUrl ?? '' }
-      );
+    const candidates = selectByTestMode(result.items, this.testMode);
+    // Why a slot is empty, by slot: the first reason that took a rule out of it.
+    const left = new Map<string, { reason: AppExplainReason; detail?: NotShownDetail }>();
+    for (const item of result.items) {
+      if (!candidates.includes(item)) {
+        if (!left.has(item.placementKey)) left.set(item.placementKey, { reason: 'test', detail: { assignmentId: item.assignmentId } });
+      }
+    }
+    const verdicts = await this.segments.shouldShowMany(
+      candidates.map((item) => ({ mode: item.segmentTargetingMode, segmentIds: item.segmentIds })),
+      { pageUrl: this.currentPageUrl ?? '' }
+    );
+    for (const [index, item] of candidates.entries()) {
+      const inSegment = verdicts[index];
       if (!inSegment) {
         this.log(`Enrichment rule outside segment targeting: ${item.assignmentId}`);
+        if (!left.has(item.placementKey)) left.set(item.placementKey, { reason: 'segment', detail: { assignmentId: item.assignmentId } });
         continue;
       }
       visible.push(item);
     }
 
     // After targeting, so a slot's winner is the first rule this visitor can see.
-    return { ...result, items: keepSlotWinners(visible) };
+    const winners = keepSlotWinners(visible);
+    for (const key of keys) {
+      if (winners.some((item) => item.placementKey === key)) {
+        // Drawn from the SDK's side; `<SelwiseEnrichment>` says if the WebView then fails.
+        this.noteEnrichment(key, null);
+        continue;
+      }
+      const why = left.get(key);
+      if (why) this.noteEnrichment(key, why.reason, why.detail);
+      else if (visible.some((item) => item.placementKey === key)) this.noteEnrichment(key, 'conflict');
+      // A name no live rule carries (asked anyway: the copy of `/config` may be older than the rule).
+      else if (options.probe) continue;
+      else if (known.length > 0 && !known.includes(key)) this.noteEnrichment(key, 'unknown_slot', { known: known.join(',') });
+      // Nothing matched this product: the catalogue knows the code or it does not.
+      else this.noteEnrichment(key, 'content', { code: productCode, resolved: result.resolved });
+    }
+    return { ...result, items: winners };
   }
 
   /** The rules for one slot, in stacking order. */
@@ -2025,75 +3216,180 @@ export class Selwise {
   // ---- search ----
 
   /**
-   * The channel's search behaviour as the dashboard set it
-   * (`/search-config` → `settings.behavior`): how many characters start a
-   * search and how long to wait after typing. `useSelwiseSearch` starts from
-   * these, so the app and the storefront answer the same keystrokes. Read
-   * once; a failed read is `null` (the hook keeps its own defaults) and is
-   * asked again next time.
+   * The search of this client: settings, suggestions, the search and its events
+   * (see `SearchService`). One per client, built the first time it is asked.
    */
-  getSearchBehavior(): Promise<SearchBehavior | null> {
-    this.assertReady();
-    if (!this.searchBehavior) {
-      this.searchBehavior = this.endpointsApi
-        .getSearchConfig()
-        .then(readSearchBehavior)
-        .catch((error: unknown) => {
-          this.searchBehavior = null;
-          this.log('Search behaviour could not be read', error);
-          return null;
-        });
+  private get searchSvc(): SearchService {
+    if (!this.searchService) {
+      this.searchService = new SearchService({
+        getConfig: () => this.endpointsApi.getSearchConfig(),
+        getSuggestions: () => this.endpointsApi.getSearchSuggestions(),
+        search: (query, options, signal) => this.endpointsApi.search(query, options, signal),
+        blockedByTestMode: async () => {
+          if (!this.remote) await this.loadRemoteConfig();
+          return this.remote?.searchTestMode === true && !this.testMode;
+        },
+        testMode: () => this.testMode,
+        locale: () => this.http.getLocale() ?? '',
+        screen: () => this.currentPageUrl ?? '',
+        inAudience: (mode, segmentIds) =>
+          this.segments.shouldShow(mode, segmentIds, { pageUrl: this.currentPageUrl ?? '' }),
+        arm: async () => {
+          await this.loadExperiments();
+          // The arms THIS screen lets the visitor into, like a strip's.
+          return (await this.stripGate()).forTargetType('search_config');
+        },
+        expose: (assignment) => this.recordExperimentExposure(assignment),
+        track: (name, options) => this.track(name, options),
+        mayKeepHistory: () => this.consentAllows('searchHistory'),
+        storage: () => this.storage,
+        channelKey: () => this.options.siteKey,
+        log: (message, detail) => this.log(message, detail),
+      });
     }
-    return this.searchBehavior;
+    return this.searchService;
   }
 
+  /**
+   * Whether search is on for this visitor, and the settings they draw — the one
+   * answer behind `getSearchSettings()`, for a host that must tell "off" from
+   * "not known yet": `off` (the channel's search is off, the visitor is outside
+   * its audience or in an experiment's holdout), `test` (in test mode, and this
+   * client was not started with `testMode`), `unknown` (the configuration could
+   * not be read — nothing is blocked, and it is asked again next time).
+   */
+  getSearchState(): Promise<SearchResolution> {
+    this.assertReady();
+    return this.searchSvc.resolve();
+  }
+
+  /**
+   * The channel's search settings as THIS visitor draws them: the dashboard's
+   * document (`/search-config`) in the app's language, with the phone's own
+   * layer over it and — when the visitor is in a search experiment — the arm's
+   * changes over that. `null` when search is not on for them (see
+   * `getSearchState` for why). Read once per language and screen; read again
+   * after `setLocale` and after the configuration is refreshed.
+   */
+  async getSearchSettings(): Promise<SearchSettings | null> {
+    return (await this.getSearchState()).settings;
+  }
+
+  /**
+   * The channel's search behaviour as the dashboard set it: how many characters
+   * start a search, how long to wait after typing, how many results a page
+   * holds. `null` when the settings are not on or could not be read (the hook
+   * keeps its own defaults).
+   */
+  async getSearchBehavior(): Promise<SearchBehavior | null> {
+    return (await this.getSearchSettings())?.behavior ?? null;
+  }
+
+  /**
+   * What the empty search box offers: this device's recent searches, the
+   * channel's popular searches, categories and products — each cut to the
+   * limit the settings say, in `order`. `query` narrows the two lists of terms to
+   * those containing it. A section the merchant switched off is empty.
+   *
+   * Recent searches are kept on the device only while the visitor's consent
+   * allows remembering them (the preferences category); without it they live in
+   * memory until the app closes.
+   */
+  async getSearchSuggestions(options: { query?: string } = {}): Promise<SearchSuggestionSections> {
+    this.assertReady();
+    return this.searchSvc.suggestions(options);
+  }
+
+  /** This device's last searches, newest first (`max`: the channel's own limit by default). */
+  async getRecentSearches(max?: number): Promise<string[]> {
+    this.assertReady();
+    const limit = max ?? (await this.getSearchSettings())?.suggestions.recent.max ?? 6;
+    return this.searchSvc.recentSearches(limit);
+  }
+
+  removeRecentSearch(term: string): Promise<void> {
+    this.assertReady();
+    return this.searchSvc.removeRecentSearch(term);
+  }
+
+  /** Forgets this device's recent searches (the box's "clear" action). */
+  clearRecentSearches(): Promise<void> {
+    this.assertReady();
+    return this.searchSvc.clearRecentSearches();
+  }
+
+  /**
+   * Searches the channel's catalogue. A page is `options.limit` results (the
+   * channel's `maxResults` by default) from `options.offset`; the next page
+   * starts at `offset + hits.length`. An empty query with a `category` browses
+   * that category.
+   *
+   * Reported once per search, from the first page: `search_query`, or
+   * `search_zero_results` when nothing matched; a merchant's redirect is an
+   * answer and is reported as a search. A page, a category or an order of the
+   * same search is `options.refinement` and is not reported again. The click
+   * and the add to cart are the view's to report (`trackSearchClick`,
+   * `trackSearchAddToCart`).
+   *
+   * `status` says when the list is empty for a reason that is not "nothing
+   * matched" (`off`, `test`).
+   */
   async search(query: string, options: SearchOptions = {}, signal?: AbortSignal): Promise<SearchResult> {
     this.assertReady();
-    // Search in TEST MODE is the merchant trying it out: the browser widget
-    // takes over the search box only for a test-mode visitor, and so does this
-    // call now. It used to answer every shopper, and count their searches in
-    // the report, while the dashboard said search was still being tested.
-    if (!this.remote) await this.loadRemoteConfig();
-    if (this.remote?.searchTestMode && !this.testMode) {
-      this.log('Search is in test mode; only a client initialised with testMode searches');
-      return { query, hits: [], total: 0 };
-    }
-    const result = await this.endpointsApi.search(query, options, signal);
-    const redirect = typeof result.redirect === 'string' ? result.redirect.trim() : '';
-
-    if (redirect) {
-      // A redirect is an ANSWER, not a failed search: "kargo" sends the visitor
-      // to the shipping page, usually with zero hits. Reporting that as
-      // `search_zero_results` would fill the merchant's zero-results report
-      // with the rules they wrote themselves. The browser widget navigates and
-      // records nothing here for the same reason.
-      this.track('search_query', {
-        entityType: 'search',
-        entityId: query,
-        metadata: { query, resultsCount: searchResultCount(result), redirect },
-      });
-      return result;
-    }
-
-    this.track(result.hits.length === 0 ? 'search_zero_results' : 'search_query', {
-      entityType: 'search',
-      entityId: query,
-      // `resultsCount` is the key the search report reads (as the browser
-      // widget sends it). This SDK sent `resultCount`, so every app search
-      // averaged 0 results.
-      metadata: { query, resultsCount: searchResultCount(result) },
-    });
-
-    return result;
+    return this.searchSvc.search(query, options, signal);
   }
 
-  trackSearchClick(query: string, itemCode: string, position?: number): void {
-    this.track('product_click', {
-      entityType: 'search',
-      entityId: query,
-      productItemCode: itemCode,
-      metadata: position === undefined ? { query } : { query, position },
-    });
+  /**
+   * The search was opened. The first open of a visitor who is in a search
+   * experiment is their exposure to its arm. `trigger`: a button (`click`, the
+   * default), the field taking focus (`focus`) or typing (`typing`).
+   */
+  trackSearchOpen(trigger: SearchOpenTrigger = 'click'): void {
+    this.assertReady();
+    void this.searchSvc.open(trigger).catch((error) => this.log('Search open not reported', error));
+  }
+
+  /**
+   * The search was closed. Reports how long it was open and the last query and
+   * count the SDK saw; pass `summary` to say them yourself. Nothing is sent for
+   * a search that was not opened with `trackSearchOpen`.
+   */
+  trackSearchClose(summary?: { query?: string; resultCount?: number }): void {
+    this.assertReady();
+    this.searchSvc.close(summary);
+  }
+
+  /**
+   * A suggestion was tapped: a recent search, a popular search or category (their
+   * text), or a popular product (the product; the tap is also a click out of the
+   * search).
+   */
+  trackSuggestionClick(kind: 'recent' | 'popularSearch' | 'popularCategory', term: string): void;
+  trackSuggestionClick(kind: 'popularProduct', product: SelwiseProduct): void;
+  trackSuggestionClick(kind: SearchSuggestionKind, value: string | SelwiseProduct): void {
+    this.assertReady();
+    this.searchSvc.suggestionClick(kind, value);
+  }
+
+  /**
+   * A result was tapped. `query` is the term it came from and `category` the
+   * category the result counts under (the one the shopper filtered by, else the
+   * result's own top category — `primaryTopCategory(product.categories)`); the
+   * API's search log is written from this event, so a popular product and a
+   * popular category are counted from it.
+   */
+  trackSearchClick(query: string, itemCode: string, position?: number, category?: string): void {
+    this.assertReady();
+    this.searchSvc.click(query, itemCode, position, category);
+  }
+
+  /** A product was added to the basket from the search: the add is attributed to it. */
+  trackSearchAddToCart(
+    product: Pick<SelwiseProduct, 'itemCode' | 'title' | 'price' | 'currency'>,
+    options?: { query?: string; quantity?: number }
+  ): void {
+    this.assertReady();
+    this.searchSvc.addedToCart(product, options);
   }
 
   // ---- orders ----
@@ -2121,15 +3417,23 @@ export class Selwise {
     const measured = this.consentAllows('orderAttribution');
     const { visitorId: _visitorId, siteUserId: _siteUserId, sessionId: _sessionId, ...anonymous } =
       order as OrderInput & { visitorId?: string; siteUserId?: string; sessionId?: string };
+    // `originalPrice` is a typed convenience: the order route reads a line's
+    // other facts from its `metadata`, where the list price is kept.
+    const lines = order.items?.map(({ originalPrice, ...line }) =>
+      typeof originalPrice === 'number' && Number.isFinite(originalPrice)
+        ? { ...line, metadata: { ...(line.metadata ?? {}), originalPrice } }
+        : line
+    );
     return this.endpointsApi.ingestOrder({
       ...(measured
         ? {
             ...order,
+            ...(lines ? { items: lines } : {}),
             sessionId,
             visitorId: this.identity.getVisitorId(),
             ...(siteUserId ? { siteUserId } : {}),
           }
-        : anonymous),
+        : { ...anonymous, ...(lines ? { items: lines } : {}) }),
       deviceType: 'mobile_app',
       metadata: {
         ...(order.metadata ?? {}),
@@ -2143,19 +3447,49 @@ export class Selwise {
 
   // ---- internals ----
 
+  /**
+   * What the app knows about the person that a segment can be built on: the OS,
+   * the release, the language, the notification permission. Only what the host
+   * gave (an absent fact is "unknown", never a default), and bounded to what the
+   * server accepts — one value too long would be a 400 for the WHOLE segment
+   * request, which the include-mode gate reads as "member of nothing".
+   */
+  private appFacts(): {
+    platform?: 'ios' | 'android';
+    appVersion?: string;
+    appLocale?: string;
+    pushPermission?: PushPermission;
+  } {
+    const clip = (value: string | undefined): string | undefined => {
+      const text = (value ?? '').trim();
+      return text.length > 0 && text.length <= APP_FACT_MAX_LENGTH ? text : undefined;
+    };
+    const appVersion = clip(this.options.appVersion);
+    const appLocale = clip(this.http?.getLocale());
+    return {
+      ...(this.options.platform ? { platform: this.options.platform } : {}),
+      ...(appVersion ? { appVersion } : {}),
+      ...(appLocale ? { appLocale } : {}),
+      ...(this.pushPermission ? { pushPermission: this.pushPermission } : {}),
+    };
+  }
+
   /** Does the visitor's consent answer allow this request (`CONSENT_CHANNEL_CATEGORIES`)? */
   private consentAllows(channel: ConsentChannel): boolean {
     return this.consent.hasCategory(CONSENT_CHANNEL_CATEGORIES[channel]);
   }
 
   /**
-   * The behaviour snapshot with the consent signals filled in from the
-   * consent answer (`consentMarketing`, …) — so a surface or an experiment
+   * The behaviour snapshot with every signal the SDK knows itself filled in:
+   * the consent answer (`consentMarketing`, …) — so a surface or an experiment
    * the merchant restricted to consenting visitors is judged in the app as on
-   * the web. A host that passes its own values wins, as for the cart signals.
+   * the web — and the clock and session signals (`hourOfDay`, `visitCount`,
+   * `pageViewsThisSession`, …, `core/visitor-signals.ts`). A host that passes its
+   * own values wins, as for the cart signals.
    */
-  private withConsentSignals(behavior: BehaviorSnapshot | undefined): BehaviorSnapshot {
+  private withOwnSignals(behavior: BehaviorSnapshot | undefined): BehaviorSnapshot {
     return {
+      ...this.visitor.snapshot(),
       consentAnalytics: this.consent.hasCategory('analytics'),
       consentMarketing: this.consent.hasCategory('marketing'),
       consentPreferences: this.consent.hasCategory('preferences'),
@@ -2203,11 +3537,6 @@ export class Selwise {
   }
 }
 
-/** The query's total matches when the API states it, else the hits returned. */
-function searchResultCount(result: { hits: unknown[]; total?: unknown }): number {
-  return typeof result.total === 'number' && Number.isFinite(result.total) ? result.total : result.hits.length;
-}
-
 /** How many events of a batch the server refused, from its 200 answer. */
 function readRejectedCount(response: unknown): number {
   if (!response || typeof response !== 'object') return 0;
@@ -2222,33 +3551,4 @@ function readRejectedCount(response: unknown): number {
 function isPermanentRejection(status: number): boolean {
   if (status === 408 || status === 429) return false;
   return status >= 400 && status < 500;
-}
-
-/** The two numbers of `settings.behavior` the app's search hook reads. */
-export interface SearchBehavior {
-  minChars: number;
-  debounceMs: number;
-}
-
-/**
- * `settings.behavior` out of a `/search-config` body, or `null` when it has
- * none (search never configured, or an older API). Bounds are the search
- * contract's (`SEARCH_SETTINGS_BOUNDS`), restated because the SDK ships
- * without the contract packages.
- */
-export function readSearchBehavior(body: unknown): SearchBehavior | null {
-  const raw = (body as { settings?: Record<string, unknown> } | null)?.settings;
-  // An app is always a phone: the settings as a phone reads them.
-  const settings = raw
-    ? (resolveForDevice(raw, raw.devices as { mobile?: Record<string, unknown> } | undefined, 'mobile') as {
-        behavior?: Record<string, unknown>;
-      })
-    : undefined;
-  const behavior = settings?.behavior;
-  if (!behavior || typeof behavior !== 'object') return null;
-  const int = (value: unknown, min: number, max: number): number | null =>
-    typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : null;
-  const minChars = int(behavior.minChars, 1, 10);
-  const debounceMs = int(behavior.debounceMs, 0, 2000);
-  return minChars === null || debounceMs === null ? null : { minChars, debounceMs };
 }

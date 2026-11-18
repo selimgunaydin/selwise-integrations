@@ -86,6 +86,17 @@ describe('getSurfaces: the experiment`s own audience', () => {
     expect(decodeURIComponent(assign.url)).toContain('capabilities=holdout,audience');
   });
 
+  it('sends the API key on the assignment read, as it does on the experiment write', async () => {
+    const calls = install({ assignments: assignments({}) });
+    const client = await init();
+    await client.getSurfaces('app://home');
+    await settle();
+    const assign = calls.find((call) => call.url.includes('/experiments/assign'))!;
+    expect((assign.init.headers as Record<string, string>)['x-selwise-api-key']).toBe('api-key');
+    const track = calls.find((call) => call.url.includes('/public/experiments/track'));
+    if (track) expect((track.init.headers as Record<string, string>)['x-selwise-api-key']).toBe('api-key');
+  });
+
   it('gives a screen outside the audience the live campaign, uncounted', async () => {
     const calls = install({ assignments: assignments({ targeting: { device: { types: ['tablet'] } } }) });
     const client = await init();

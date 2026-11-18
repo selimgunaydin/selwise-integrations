@@ -1,6 +1,6 @@
 {
   "name": "selwise-akinon-appmaker",
-  "version": "0.10.0",
+  "version": "1.0.0",
   "description": "Selwise plugin for Akinon App Maker (rn-env 7). Subscribes to the app's own AnalyticsService, so tracking, identity, recommendations and order attribution work without editing screens.",
   "main": "integration/index.js",
   "license": "MIT",

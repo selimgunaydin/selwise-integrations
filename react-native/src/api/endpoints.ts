@@ -19,9 +19,13 @@ import type {
  * whether the route declares `PublicSiteGuard` on the server:
  *
  *   guarded   → /config, /recommendations, /recommendations/:id/products,
- *               /search, /search-config, /search/suggestions, /orders
- *   ungated   → /events/batch, /presence, /recommendations/track/*, /search/log,
- *               /search/click, /search/zero-results
+ *               /search, /search-config, /search/suggestions, /orders,
+ *               /experiments/assign, /experiments/track
+ *   ungated   → /events/batch, /presence, /recommendations/track/*
+ *
+ * An app never calls `/search/log`, `/search/click` or `/search/zero-results`:
+ * the API writes the same rows from the app's `search_query`, `product_click`
+ * and `search_zero_results` events, and a call here would count each search twice.
  *
  * Keep this comment in step with `apps/api/src/modules/public/controllers/*`:
  * marking a guarded route `unauthenticated` produces a 403 that looks like a
@@ -216,6 +220,8 @@ export class Endpoints {
         maxPrice: options.maxPrice,
         inStock: options.inStock,
         category: options.category,
+        offset: options.offset,
+        sort: options.sort,
         // An app is always a phone: the search answers with its phone settings.
         device: 'mobile',
       },
@@ -230,6 +236,25 @@ export class Endpoints {
       [];
 
     return { ...response, query, hits } as SearchResult;
+  }
+
+  /**
+   * The app telling the dashboard which screens and named points it has shown.
+   * Carries no visitor, no consent decision and no event: it describes the app,
+   * which is why it does not wait for either.
+   */
+  reportClient(
+    body: {
+      screens: string[];
+      slots: string[];
+      libraryVersion?: string;
+      pluginVersion?: string;
+      appVersion?: string;
+      testMode?: boolean;
+    },
+    signal?: AbortSignal
+  ): Promise<{ ok?: boolean }> {
+    return this.http.request({ path: '/client-report', method: 'POST', body, signal });
   }
 
   getSearchConfig(signal?: AbortSignal): Promise<Record<string, unknown>> {
@@ -269,6 +294,18 @@ export class Endpoints {
   }
 
   /**
+   * Merchant traits for an already identified customer (`POST /users/traits`).
+   * What the SDK uses to keep the facts a segment reads (`pushPermission`) fresh
+   * after the login that first sent them.
+   */
+  setUserTraits(
+    payload: { externalId: string; visitorId?: string; traits: Record<string, unknown> },
+    signal?: AbortSignal
+  ): Promise<{ success?: boolean }> {
+    return this.http.request({ path: '/users/traits', method: 'POST', body: payload, signal });
+  }
+
+  /**
    * Newsletter signup, from a newsletter widget.
    *
    * Guarded, so it carries the api key. `sourcePath` is the synthetic screen
@@ -279,14 +316,56 @@ export class Endpoints {
     payload: {
       email: string;
       fullName?: string;
+      /** With `channels: ['email', 'sms']`: the number the SMS opt-in is for. */
+      phone?: string;
+      channels?: Array<'email' | 'sms'>;
       locale?: string;
       visitorId?: string;
       siteUserId?: string;
       sourcePath?: string;
+      /** The consent wording shown next to the form, exactly as shown, and its version (opt-in evidence). */
+      consentText?: string;
+      consentTextVersion?: string;
     },
     signal?: AbortSignal
   ): Promise<{ success?: boolean; status?: string; error?: string }> {
     return this.http.request({ path: '/newsletter', method: 'POST', body: payload, signal });
+  }
+
+  /**
+   * Register, refresh or update a phone for app push (`POST /push-devices`).
+   * Idempotent on the token. Guarded, so it carries the api key; `siteUserId`
+   * is explicit (`null` unlinks the phone from the customer who logged out).
+   */
+  registerPushDevice(
+    body: {
+      visitorId: string;
+      siteUserId: string | null;
+      token: string;
+      provider: 'fcm' | 'apns' | 'expo';
+      platform: 'ios' | 'android';
+      permission: 'granted' | 'denied' | 'undetermined';
+      /** `true` while the app's marketing consent allows notifying the phone; it brings back a phone revoked because consent was withdrawn. */
+      marketingConsent?: boolean;
+      appVersion?: string;
+      locale?: string;
+    },
+    signal?: AbortSignal
+  ): Promise<{ success?: boolean }> {
+    return this.http.request({ path: '/push-devices', method: 'POST', body, signal });
+  }
+
+  /** Stop notifying a phone (`POST /push-devices/revoke`). `success: false` says nothing was live. */
+  revokePushDevice(
+    body: {
+      visitorId: string;
+      token: string;
+      provider: 'fcm' | 'apns' | 'expo';
+      reason: 'app_unregistered' | 'consent_withdrawn';
+    },
+    signal?: AbortSignal
+  ): Promise<{ success?: boolean }> {
+    return this.http.request({ path: '/push-devices/revoke', method: 'POST', body, signal });
   }
 
   /** Order ingest. `orderId` is the idempotency key — re-sending never double-counts. */
@@ -317,6 +396,13 @@ export class Endpoints {
       sessionId?: string;
       deviceType?: string;
       pageUrl?: string;
+      /** The OS, the release, the language and the push permission the app reports (app segments). */
+      platform?: 'ios' | 'android';
+      appVersion?: string;
+      appLocale?: string;
+      pushPermission?: 'granted' | 'denied' | 'undetermined';
+      /** Days since each app screen was last opened on this device, by screen key; `{}` is "none". */
+      screenDaysAgo?: Record<string, number>;
     },
     signal?: AbortSignal
   ): Promise<{ results?: Record<string, boolean> }> {
@@ -329,10 +415,15 @@ export class Endpoints {
     });
   }
 
-  /** A/B assignments for this visitor. Stable per visitor, so fetched once. */
+  /**
+   * A/B assignments for this visitor. Stable per visitor, so fetched once. An
+   * app channel's request is answered only with its API key, which is sent.
+   */
   getExperimentAssignments(
     visitorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** QA: experimentId → variantId. The server skips the hash and the traffic gate for these. */
+    forced?: Record<string, string>
   ): Promise<Record<string, ExperimentAssignment>> {
     return this.http.request({
       path: '/experiments/assign',
@@ -345,19 +436,27 @@ export class Endpoints {
       // here, not through `/config`, so the API checks what an arm's override
       // (or swapped-in campaign) says and checks against it, and keeps an SDK
       // that cannot draw it as written out of that experiment.
-      query: { visitorId, capabilities: EXPERIMENT_CLIENT_CAPABILITIES, p: CONFIG_PROTOCOL_CURRENT },
+      query: {
+        visitorId,
+        capabilities: EXPERIMENT_CLIENT_CAPABILITIES,
+        p: CONFIG_PROTOCOL_CURRENT,
+        ...(forced && Object.keys(forced).length > 0
+          ? { forceVariant: Object.entries(forced).map(([experiment, variant]) => `${experiment}:${variant}`) }
+          : {}),
+      },
       absolute: true,
       signal,
     });
   }
 
   /**
-   * One experiment event — the SDK sends only `exposure`, the denominator.
-   * Ungated on the server (`PublicExperimentsController` has no site guard;
-   * it resolves the channel from `siteKey`), so the key is not sent.
+   * One experiment event: `exposure`, the denominator, or `click`, a tap on the
+   * tested surface or strip (the arm's click goal). These counters are an
+   * experiment's whole result set, so the API holds an app channel's writes to
+   * its key like every other app write — the key is sent.
    */
   trackExperimentEvent(
-    body: { experimentId: string; variantId: string; eventType: 'exposure'; visitorId: string },
+    body: { experimentId: string; variantId: string; eventType: 'exposure' | 'click'; visitorId: string },
     signal?: AbortSignal
   ): Promise<unknown> {
     return this.http.request({
@@ -365,7 +464,26 @@ export class Endpoints {
       method: 'POST',
       body,
       absolute: true,
-      unauthenticated: true,
+      signal,
+    });
+  }
+
+  /**
+   * How many visitors viewed a product in a period (`product_view_count`) or have
+   * it in a basket (`cart_count`) — the counter surfaces' number. The same two
+   * public routes the browser widget reads; they answer an app by its key, with no
+   * Origin. `{ count }`, which the caller reads with `Number(count) || 0`.
+   */
+  getProductMetric(
+    metric: { kind: 'product_view_count'; product: string; period: string } | { kind: 'cart_count'; product: string; metric: string },
+    signal?: AbortSignal
+  ): Promise<{ count?: number } | undefined> {
+    return this.http.request({
+      path: metric.kind === 'cart_count' ? '/product-metrics/cart-count' : '/product-metrics/view-count',
+      query:
+        metric.kind === 'cart_count'
+          ? { product: metric.product, metric: metric.metric }
+          : { product: metric.product, period: metric.period },
       signal,
     });
   }
@@ -403,26 +521,6 @@ export class Endpoints {
   trackRecommendationEvent(body: unknown, signal?: AbortSignal): Promise<unknown> {
     return this.http.request({
       path: '/recommendations/track/event',
-      method: 'POST',
-      body,
-      unauthenticated: true,
-      signal,
-    });
-  }
-
-  logSearch(body: unknown, signal?: AbortSignal): Promise<unknown> {
-    return this.http.request({
-      path: '/search/log',
-      method: 'POST',
-      body,
-      unauthenticated: true,
-      signal,
-    });
-  }
-
-  trackSearchClick(body: unknown, signal?: AbortSignal): Promise<unknown> {
-    return this.http.request({
-      path: '/search/click',
       method: 'POST',
       body,
       unauthenticated: true,

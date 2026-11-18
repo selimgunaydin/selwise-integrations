@@ -27,6 +27,7 @@ Ortak parçalar: [`shared/`](./shared)
 shared/
   selwise-ee-shim.js      Enhanced Ecommerce olaylarını GA4 adlarına yansıtır ← çoğu projede gerekmez (ön ayar ikisini de okur)
   selwise-basket-hook.js  Selwise sepete ekledikten sonra eski temada mini sepet ← yalnız eski Django temaları
+  selwise-cart-bridge-core.js  PZ Next köprüsünün bağımlılıksız çekirdeği (SelwiseCartBridge.tsx kullanır)
   selwise-loader.js       Çoklu pazar: hostname → siteKey                     ← tek pazarda gerekmez
   page-patterns.json      Panele girilecek düzeltilmiş sayfa desenleri        ← her projede gerekli
 pz-classic/
@@ -37,6 +38,7 @@ pz-next/
   SelwiseScript.tsx       Kod ile kurulum (CMS widget'ı tercih edilmezse)
   selwise-events.ts       Eksik GA4 event'leri: search, sign_up
   selwise-ssr.ts          Sunucu taraflı zenginleştirme (server component)     ← SEO için
+  SelwiseCartBridge.tsx   Selwise'tan eklenen ürünü temanın sepetine yansıtır   ← her PZ Next projesinde
 ```
 
 ---
@@ -176,11 +178,33 @@ Template'teki üç context ifadesini projenin kendi order objesine göre
 düzeltin — `order.number`, `order.amount`, `order.orderitem_set` PZ
 varsayılanları ama her projede aynı değil.
 
-**6. Mini sepet (yalnız eski temalar)** — güncel PZ temaları widget'ın
-`refresh-basket` olayını ve `<pz-mini-basket>` bileşenini zaten dinler; bir şey
-yapmanız gerekmez. Başlıktaki sepet sayısını sunucuda basan eski bir Django
-temasında, Selwise'ın bir öneri şeridinden eklediği ürün sayfa yenilenene kadar
-sayıya yansımaz. O temada:
+**6. Mini sepet** — Selwise bir öneri şeridinden ürün eklediğinde mağazanın
+sepet sayısının ve mini sepetinin güncellenmesi, temanın widget'ın yaydığı
+`refresh-basket` olayını dinlemesine bağlıdır. Project Zero çekirdeği bu
+dinleyiciyi sağlar ama **her tema kaydetmez**: tema kodunuzda
+`refresh-basket` geçmiyorsa temanız dinlemiyordur. Widget bu durumda da
+`<pz-mini-basket>` bileşeninin kendi `onBasketRefresh` metodunu çağırarak
+sayacı ve listeyi doğru çizer; ancak temanın redux sepet deposu eski sepette
+kalır (depoya abone diğer kodlar — analitik, hatırlatma push'ları — eklemeyi
+görmez). Temanın giriş dosyasında (`layout/index.js`) şunu ekleyin:
+
+```js
+import store from 'shop-packages/redux/store';
+import { fetchBasket } from 'shop-packages/redux/basket/actions';
+
+// Selwise (ya da herhangi bir betik) sepeti kendi eklediğinde depoyu yeniler.
+document.addEventListener('refresh-basket', () => {
+  store.dispatch(fetchBasket());
+});
+```
+
+İçe aktarmalar dosyada zaten varsa yalnızca dinleyiciyi ekleyin. Sayfada
+birden çok `<pz-mini-basket>` varsa (masaüstü ve telefon başlığı) widget
+hepsini günceller; yalnız ekranda görünen olanı açar.
+
+Başlıktaki sepet sayısını sunucuda basan **eski bir Django temasında**,
+Selwise'ın bir öneri şeridinden eklediği ürün sayfa yenilenene kadar sayıya
+yansımaz. O temada:
 
 - başlıktaki sayaç öğesine `data-selwise-basket-count` niteliğini ekleyin;
 - teme özgü başka bir şey gerekiyorsa (mini sepet parçasını yeniden çizmek,
@@ -241,6 +265,31 @@ olmadan `async` yükleme sipariş çağrılarını sessizce düşürür:
 **(b) Kod ile.** [`pz-next/SelwiseScript.tsx`](./pz-next/SelwiseScript.tsx)
 dosyasını `src/components/selwise-script.tsx`'e kopyalayıp kök layout'un
 `<head>`'ine ekleyin.
+
+**3b. Sepet köprüsü** — Selwise bir öneri şeridinden ya da aramadan ürün
+eklediğinde PZ Next'te başlıktaki sayı ve mini sepet **güncellenmez**: sepet
+RTK Query önbelleğinde tutulur, depo dışarıdan erişilemez ve tema kendiliğinden
+yeniden çekmez. [`pz-next/SelwiseCartBridge.tsx`](./pz-next/SelwiseCartBridge.tsx)
+bunu çözer: Selwise'ın `selwise:cart:added` olayını dinler ve temanın **kendi**
+sepet sorgularını geçersiz kılar; sayı ve mini sepet sunucudaki sepetten yeniden
+çizilir (native eklemenin bıraktığı veriyle aynı).
+
+1. [`shared/selwise-cart-bridge-core.js`](./shared/selwise-cart-bridge-core.js)
+   dosyasını bileşenin yanına kopyalayın (düz JS; PZ Next projeleri JS içe
+   aktarmaya izin verir).
+2. `SelwiseCartBridge.tsx`'i `src/components/selwise-cart-bridge.tsx`'e kopyalayıp
+   Redux sağlayıcısının altında **bir kez** render edin (kök layout'ta
+   `<PzRoot>` çocukları yanında olağan yer).
+3. Seçenekler: `openMiniBasket` (varsayılan `true`: mini sepeti açar ve eklenen
+   satırı vurgular; temanın native ekleme bunu yapmıyorsa `false` yapın, sayı yine
+   güncellenir), `onAdded(detail)` (projenin kendi toast'ı) ve `onError(detail)`
+   (`detail.code` nedenin kapalı listesi, `detail.message` mağazanın cümlesi).
+
+`@akinon/next` 1.126.x ve 2.x'te aynı yolları kullanır; daha eski bir sürüm
+sabitlenmişse `@akinon/next/redux/reducers/root` içinde `openMiniBasket` ve
+`setHighlightedItem` olduğunu kontrol edin. `<LiveCommerce />` bileşenini
+mount etmek **yeterli değildir**: yalnız `refresh-basket` olayını dinler,
+sayacı `MiniBasket` etiketinden okuyan temalarda sayıyı güncellemez.
 
 **4. Eksik GA4 event'leri** —
 [`pz-next/selwise-events.ts`](./pz-next/selwise-events.ts) dosyasını

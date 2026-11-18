@@ -145,8 +145,11 @@ const productCalls = (calls: FetchCall[], id?: string) =>
   calls.filter((call) =>
     id ? call.url.includes(`/recommendations/${id}/products`) : call.url.includes('/products')
   );
-const exposures = (calls: FetchCall[]) =>
+const experimentPosts = (calls: FetchCall[]) =>
   calls.filter((call) => call.url.includes('/public/experiments/track')).map((call) => call.body);
+const exposures = (calls: FetchCall[]) => experimentPosts(calls).filter((body) => body.eventType === 'exposure');
+/** A tap on a tested strip is the arm's click goal (`eventType: 'click'`). */
+const experimentClicks = (calls: FetchCall[]) => experimentPosts(calls).filter((body) => body.eventType === 'click');
 const sentEvents = (calls: FetchCall[]) =>
   calls.filter((call) => call.url.includes('/events/batch')).flatMap((call) => call.body.events);
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -184,6 +187,24 @@ describe('a different_module arm', () => {
     expect(result.products.map((p) => p.itemCode)).toEqual(['N1', 'N2']);
   });
 
+  it('says an impression was counted at visibility only when the host says so', async () => {
+    assignments = {};
+    answers['best-1'] = { products: [product('B1')] };
+    const calls = installFetch();
+    const selwise = await init();
+    await selwise.getRecommendationProducts('best-1');
+
+    selwise.trackRecommendationImpression('best-1', ['B1']);
+    selwise.trackRecommendationImpression('best-1', ['B1'], { basis: 'visible' });
+    await selwise.flush();
+    await settle();
+
+    const impressions = sentEvents(calls).filter((event: any) => event.name === 'widget_impression');
+    expect(impressions).toHaveLength(2);
+    expect(impressions[0].metadata.impressionBasis).toBeUndefined();
+    expect(impressions[1].metadata.impressionBasis).toBe('visible');
+  });
+
   it('reports the impression and the click under the arm’s strip, with one exposure', async () => {
     assignments = swapArm();
     answers['strip-arm'] = { products: [product('N1')] };
@@ -211,6 +232,10 @@ describe('a different_module arm', () => {
     expect(sent[0]).toEqual(
       expect.objectContaining({ experimentId: 'exp-1', variantId: 'arm-b', eventType: 'exposure' })
     );
+    // The tap is also the arm's click goal, once.
+    expect(experimentClicks(calls)).toEqual([
+      expect.objectContaining({ experimentId: 'exp-1', variantId: 'arm-b', eventType: 'click' }),
+    ]);
   });
 
   it('records no exposure before the strip is on screen — resolving is not showing', async () => {

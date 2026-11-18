@@ -287,6 +287,29 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "offset",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "The order of the results: `relevance` (default, with the merchant's ranking rules) or the shopper's own — `price_asc`, `price_desc`, `newest`.",
+            "schema": {
+              "enum": [
+                "relevance",
+                "price_asc",
+                "price_desc",
+                "newest"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -421,6 +444,7 @@
             "name": "lang",
             "required": false,
             "in": "query",
+            "description": "The visitor's language (`tr`, `en`…), matched to the account's languages; the default language otherwise.",
             "schema": {
               "type": "string"
             }
@@ -2621,6 +2645,174 @@
         "x-selwise-playground": true
       }
     },
+    "/public/sites/{siteKey}/push-devices": {
+      "post": {
+        "operationId": "PublicPushDevicesController_register",
+        "summary": "Register, refresh or update a device for app push (app SDK)",
+        "parameters": [
+          {
+            "name": "siteKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The channel key (Channels → Channel Overview → Channel Key). It names the channel and is not a secret."
+          },
+          {
+            "name": "x-selwise-dry-run",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "Authenticate and validate as the real call, then answer `{ dryRun: true, valid: true, request }` WITHOUT running the operation: nothing is written, recorded or queued. On an operation without dry-run support the header is a 400 (`DRY_RUN_UNSUPPORTED`), never a real write."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPushDeviceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessOnly"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "public"
+        ],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
+        "x-selwise-tier": "widget",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
+        "x-selwise-dry-run": true,
+        "x-selwise-playground": false
+      }
+    },
+    "/public/sites/{siteKey}/push-devices/revoke": {
+      "post": {
+        "operationId": "PublicPushDevicesController_revoke",
+        "summary": "Stop notifying a device (app SDK)",
+        "parameters": [
+          {
+            "name": "siteKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The channel key (Channels → Channel Overview → Channel Key). It names the channel and is not a secret."
+          },
+          {
+            "name": "x-selwise-dry-run",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "Authenticate and validate as the real call, then answer `{ dryRun: true, valid: true, request }` WITHOUT running the operation: nothing is written, recorded or queued. On an operation without dry-run support the header is a 400 (`DRY_RUN_UNSUPPORTED`), never a real write."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicPushDeviceRevokeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessOnly"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "503 pool exhausted or maintenance · 504 not finished in 30 seconds. Retry with backoff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "public"
+        ],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
+        "x-selwise-tier": "widget",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
+        "x-selwise-dry-run": true,
+        "x-selwise-playground": false
+      }
+    },
     "/public/media/{assetKey}": {
       "get": {
         "operationId": "PublicMediaController_getAsset",
@@ -3823,7 +4015,7 @@
             "name": "capabilities",
             "required": false,
             "in": "query",
-            "description": "What the client can honour, comma-separated. `holdout`: an arm flagged `holdout` draws nothing. `audience`: the client applies an arm, and counts the visitor, only where its `audience` (the experiment's own page, device, country, behaviour, segment and test-mode rules) matches. A client that does not declare one is kept out of every experiment that needs it.",
+            "description": "What the client can honour, comma-separated. `holdout`: an arm flagged `holdout` draws nothing. `audience`: the client applies an arm, and counts the visitor, only where its `audience` (the experiment's own page, device, country, behaviour, segment and test-mode rules) matches. `screen_slot`: the client resolves a screen experiment's arm for a point of a screen (app channels). A client that does not declare one is kept out of every experiment that needs it.",
             "schema": {}
           },
           {
@@ -3856,7 +4048,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 403 channel not verified, or an app channel without a valid key of the right scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -3879,9 +4071,15 @@
         "tags": [
           "Public Experiments"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          },
+          {}
+        ],
         "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "verified_app_key",
+        "x-selwise-scope": "mobile_read",
         "x-selwise-playground": false
       }
     },
@@ -3922,7 +4120,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 403 channel not verified, or an app channel without a valid key of the right scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -3945,9 +4143,15 @@
         "tags": [
           "Public Experiments"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          },
+          {}
+        ],
         "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "verified_app_key",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-playground": false
       }
     },
@@ -4932,6 +5136,38 @@
             "type": "string",
             "description": "Current page URL"
           },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android"
+            ],
+            "description": "The OS the app runs on (app channels)."
+          },
+          "appVersion": {
+            "type": "string",
+            "description": "The app release, e.g. 3.4.1 (app channels)."
+          },
+          "appLocale": {
+            "type": "string",
+            "description": "The app's language, e.g. tr-TR (app channels)."
+          },
+          "pushPermission": {
+            "type": "string",
+            "enum": [
+              "granted",
+              "denied",
+              "undetermined"
+            ],
+            "description": "The OS's notification permission for the app, as the host reported it (app channels)."
+          },
+          "screenDaysAgo": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Days since each app screen was last opened on this device, by screen key (`{ \"basket\": 2 }`). An empty object means none was opened in the window."
+          },
           "segmentIds": {
             "description": "Array of segment IDs to evaluate",
             "type": "array",
@@ -4978,6 +5214,21 @@
             "type": "object",
             "additionalProperties": true,
             "description": "The arm's own audience, judged by the client per page (needs `capabilities=audience`)."
+          },
+          "targetType": {
+            "type": "string",
+            "example": "screen_slot",
+            "description": "What the arm targets. `screen_slot` is an app channel's screen experiment: the arm names what is drawn at one point of one screen (needs `capabilities=screen_slot`)."
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The arm's override. For a `screen_slot` arm: `{ screen, slot, module: { kind, id } }`, where `kind` is `recommendation`, `enrichment`, `campaign` or `none` (the `holdout` arm)."
+          },
+          "moduleData": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The module the arm draws, in the shape the client already reads it (a campaign or a recommendation strip; an enrichment rule is its id, name and `placementKey`)."
           }
         },
         "required": [
@@ -6002,6 +6253,106 @@
           "variants"
         ]
       },
+      "PublicPushDeviceDto": {
+        "type": "object",
+        "properties": {
+          "visitorId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "The install's visitor id."
+          },
+          "siteUserId": {
+            "type": "object",
+            "maxLength": 255,
+            "nullable": true,
+            "description": "The signed-in customer id; `null` unlinks the device."
+          },
+          "token": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 512,
+            "description": "The device token, as the OS or provider SDK gave it."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "fcm",
+              "apns",
+              "expo"
+            ],
+            "description": "The token's family: which provider can send to it."
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "ios",
+              "android"
+            ]
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "granted",
+              "denied",
+              "undetermined"
+            ],
+            "description": "The OS's notification permission for the app."
+          },
+          "appVersion": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "marketingConsent": {
+            "type": "boolean",
+            "description": "True when the app's marketing consent allows notifying this device. Required to bring back a device that was revoked because consent was withdrawn."
+          },
+          "locale": {
+            "type": "string",
+            "maxLength": 35
+          }
+        },
+        "required": [
+          "visitorId",
+          "token",
+          "provider",
+          "platform",
+          "permission"
+        ]
+      },
+      "PublicPushDeviceRevokeDto": {
+        "type": "object",
+        "properties": {
+          "visitorId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "token": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 512
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "fcm",
+              "apns",
+              "expo"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "app_unregistered",
+              "consent_withdrawn"
+            ]
+          }
+        },
+        "required": [
+          "visitorId",
+          "token",
+          "provider"
+        ]
+      },
       "PublicRecommendationEligibility": {
         "type": "object",
         "properties": {
@@ -6532,6 +6883,16 @@
             "type": "string",
             "description": "Referrer URL",
             "maxLength": 1000
+          },
+          "consentText": {
+            "type": "string",
+            "description": "The consent wording the shopper saw next to the form, as shown",
+            "maxLength": 1000
+          },
+          "consentTextVersion": {
+            "type": "string",
+            "description": "The version of that wording (the merchant's own label, e.g. a policy revision)",
+            "maxLength": 40
           },
           "utmSource": {
             "type": "string",
@@ -7562,7 +7923,13 @@
           },
           "total": {
             "type": "number",
-            "example": 42
+            "example": 42,
+            "description": "Every match, not the size of this page: the same on every page of one query."
+          },
+          "offset": {
+            "type": "number",
+            "example": 0,
+            "description": "The offset this page started at. The next page is `offset + hits.length`."
           },
           "took": {
             "type": "number",
@@ -7627,6 +7994,7 @@
         "required": [
           "hits",
           "total",
+          "offset",
           "took",
           "enabled",
           "strategy",
@@ -8066,7 +8434,8 @@
               "exposure",
               "impression",
               "conversion",
-              "goal"
+              "goal",
+              "click"
             ]
           },
           "goalId": {

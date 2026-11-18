@@ -24,6 +24,13 @@ import { normalizeDynamicProduct, type DynamicProduct } from '../vendor/dynamic-
  * over it).
  */
 export interface ProductInput {
+  /**
+   * The product's code in the catalogue (`item_code`) — the one `trackProductView`
+   * is sent with. The social-proof counters ask how many people viewed or carted
+   * THIS product, so a product screen that has counters names it; without it
+   * they are not drawn (a counter never guesses which product it counts).
+   */
+  itemCode?: string | null;
   title?: string | null;
   /** What the shopper pays now. */
   price?: number | string | null;

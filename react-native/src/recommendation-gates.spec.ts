@@ -14,6 +14,12 @@ const STRIPS = [
   { id: 'vip', segmentTargetingMode: 'include', segmentIds: ['seg-vip'] },
   { id: 'not-vip', segmentTargetingMode: 'exclude', segmentIds: ['seg-vip'] },
 ];
+const PAGE_TYPED = [
+  { id: 'any' },
+  { id: 'basket-only', pageTypes: ['cart'] },
+  { id: 'product-or-home', pageTypes: ['product', 'home'] },
+];
+let listed: unknown[] = STRIPS;
 
 function installFetch(isVip: boolean) {
   (globalThis as { fetch?: unknown }).fetch = jest.fn(async (url: unknown) => {
@@ -21,7 +27,7 @@ function installFetch(isVip: boolean) {
     let body: unknown = {};
     if (path.includes('/segments/evaluate')) body = { results: { 'seg-vip': isVip } };
     else if (path.includes('/config')) body = { campaigns: [], widgets: [] };
-    else if (path.includes('/recommendations')) body = { widgets: STRIPS };
+    else if (path.includes('/recommendations')) body = { widgets: listed };
     return { ok: true, status: 200, text: async () => JSON.stringify(body) } as unknown as Response;
   });
 }
@@ -38,6 +44,10 @@ async function init(overrides: Record<string, unknown> = {}) {
   } as any);
   return selwise;
 }
+
+beforeEach(() => {
+  listed = STRIPS;
+});
 
 afterEach(() => {
   delete (globalThis as { fetch?: unknown }).fetch;
@@ -67,5 +77,42 @@ describe('recommendation strip gates (app)', () => {
     const ids = (await selwise.getRecommendationWidgets()).map((widget) => widget.id);
     expect(ids).toEqual(['live', 'vip']);
     await selwise.destroy();
+  });
+});
+
+describe('recommendation strip page types (app)', () => {
+  beforeEach(() => {
+    listed = PAGE_TYPED;
+  });
+
+  const idsOn = async (screen: string, info?: { pageType?: string }) => {
+    installFetch(false);
+    const selwise = await init();
+    selwise.setScreen(screen, info);
+    const ids = (await selwise.getRecommendationWidgets(screen)).map((widget) => widget.id);
+    const reasons = selwise.explain().map((report) => [report.id, report.reason]);
+    await selwise.destroy();
+    return { ids, reasons };
+  };
+
+  it("drops a basket strip on the product screen and says it is the screen's page type", async () => {
+    const { ids, reasons } = await idsOn('app://product');
+    expect(ids).toEqual(['any', 'product-or-home']);
+    expect(reasons).toEqual([['basket-only', 'screens']]);
+  });
+
+  it('keeps it on the basket screen, by the catalogue type of the address', async () => {
+    const { ids } = await idsOn('app://basket');
+    expect(ids).toEqual(['any', 'basket-only']);
+  });
+
+  it('prefers the page type the host passed for the current screen', async () => {
+    const { ids } = await idsOn('app://product', { pageType: 'cart' });
+    expect(ids).toEqual(['any', 'basket-only']);
+  });
+
+  it('still shows a strip on a screen whose type is unknown', async () => {
+    const { ids } = await idsOn('app://some-custom-screen');
+    expect(ids).toEqual(['any', 'basket-only', 'product-or-home']);
   });
 });

@@ -38,7 +38,7 @@ export const CLICK_ID_PARAMS = ['gclid', 'fbclid', 'msclkid'] as const;
 export const PARAM_VALUE_MAX = 100;
 /** The medium kept on the message click, as the browser widget keeps it. */
 const MEDIUM_MAX = 40;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface DeepLinkAttribution {
   /** The link reduced to scheme, host, path and the attribution parameters. */
@@ -50,7 +50,7 @@ export interface DeepLinkAttribution {
   clickIds: string[];
 }
 
-function decode(value: string): string {
+export function decode(value: string): string {
   try {
     return decodeURIComponent(value.replace(/\+/g, ' '));
   } catch {

@@ -184,6 +184,14 @@ export const CONSENT_CHANNEL_CATEGORIES = {
    * remembered setting, so `preferences`. Neither written nor shown without it.
    */
   searchHistory: 'preferences',
+  /**
+   * An app registering a phone for notifications (`registerPushToken`): the
+   * token is how the merchant's scenarios reach this person outside the app —
+   * a marketing channel, so `marketing`, the category an e-mail or SMS opt-in
+   * lives in. Without it the token is neither registered nor kept, and a
+   * withdrawal revokes the one already registered.
+   */
+  pushDevice: 'marketing',
 } as const satisfies Record<string, ConsentCategoryKey>;
 
 export type ConsentChannel = keyof typeof CONSENT_CHANNEL_CATEGORIES;

@@ -724,17 +724,32 @@ export function evaluateBehaviorTargeting(
 }
 
 /**
+ * Which dimension of a targeting config a context failed, or `null` when it
+ * passes all of them. The order is the order they are judged in, and the
+ * first one missed is the answer.
+ *
+ * `evaluateTargeting` is exactly `targetingMiss(...) === null`: a caller that
+ * wants to SAY why a surface is not shown (the app SDK's `explain()`) asks this
+ * one and cannot disagree with the one that decides.
+ */
+export type TargetingMiss = 'page' | 'device' | 'country' | 'behavior';
+
+export function targetingMiss(targetingInput: unknown, ctx: TargetingContext): TargetingMiss | null {
+  const targeting = normalizePageTargeting(targetingInput);
+
+  if (!evaluatePageTargeting(targeting, ctx.pageUrl, ctx.pageType)) return 'page';
+  if (!evaluateDeviceTargeting(targeting.device, ctx.deviceType)) return 'device';
+  if (!evaluateGeoTargeting(targeting.geo, ctx.country)) return 'country';
+  if (!evaluateBehaviorTargeting(targeting.behavior, ctx.behavior)) return 'behavior';
+
+  return null;
+}
+
+/**
  * Unified targeting evaluation: page (URL and kind) AND device AND geo AND
  * behavior. Each dimension fails open when its config is empty or runtime
  * context is missing.
  */
 export function evaluateTargeting(targetingInput: unknown, ctx: TargetingContext): boolean {
-  const targeting = normalizePageTargeting(targetingInput);
-
-  if (!evaluatePageTargeting(targeting, ctx.pageUrl, ctx.pageType)) return false;
-  if (!evaluateDeviceTargeting(targeting.device, ctx.deviceType)) return false;
-  if (!evaluateGeoTargeting(targeting.geo, ctx.country)) return false;
-  if (!evaluateBehaviorTargeting(targeting.behavior, ctx.behavior)) return false;
-
-  return true;
+  return targetingMiss(targetingInput, ctx) === null;
 }

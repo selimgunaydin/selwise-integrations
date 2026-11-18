@@ -25,14 +25,13 @@ interface StoreValue {
   lines: CartLine[];
   total: number;
   itemCount: number;
-  add: (product: SelwiseProduct) => void;
+  /** `report: false` when Selwise's own component already reported the add (a strip card, a search result). */
+  add: (product: SelwiseProduct, quantity?: number, options?: { report?: boolean }) => void;
   remove: (itemCode: string) => void;
   clear: () => void;
   customer: Customer | null;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
-  open: SelwiseProduct | null;
-  setOpen: (p: SelwiseProduct | null) => void;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -58,16 +57,19 @@ function report(lines: CartLine[]) {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
-  const [open, setOpen] = useState<SelwiseProduct | null>(null);
 
-  const add = useCallback((product: SelwiseProduct) => {
+  const add = useCallback((product: SelwiseProduct, quantity = 1, options?: { report?: boolean }) => {
     setLines((prev) => {
       const found = prev.find((l) => l.product.itemCode === product.itemCode);
-      const next = found ? prev.map((l) => (l === found ? { ...l, qty: l.qty + 1 } : l)) : [...prev, { product, qty: 1 }];
+      const next = found
+        ? prev.map((l) => (l === found ? { ...l, qty: l.qty + quantity } : l))
+        : [...prev, { product, qty: quantity }];
       report(next);
       return next;
     });
-    selwise.trackAddToCart(product.itemCode, { quantity: 1, price: product.price, currency: product.currency || CURRENCY });
+    if (options?.report !== false) {
+      selwise.trackAddToCart(product.itemCode, { quantity, price: product.price, currency: product.currency || CURRENCY });
+    }
   }, []);
 
   const remove = useCallback((itemCode: string) => {
@@ -124,10 +126,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       customer,
       signIn,
       signOut,
-      open,
-      setOpen,
     }),
-    [lines, add, remove, clear, customer, signIn, signOut, open],
+    [lines, add, remove, clear, customer, signIn, signOut],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Modal, Switch, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { selwise } from '../selwise';
+import { enablePush } from '../push';
 import { Button, colors, styles } from '../ui';
 
 /**
@@ -28,6 +29,8 @@ export function ConsentSheet({ onDone }: { onDone: () => void }) {
   const save = async (a: boolean, m: boolean) => {
     await AsyncStorage.setItem(CONSENT_RECORD, JSON.stringify({ analytics: a, marketing: m, at: Date.now() }));
     await selwise.setConsent({ granted: a || m, categories: { analytics: a, marketing: m } });
+    // Notifications are a marketing decision: ask the OS only for someone who just agreed to it.
+    if (m) void enablePush();
     onDone();
   };
 

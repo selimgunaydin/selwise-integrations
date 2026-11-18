@@ -108,7 +108,12 @@ export function normalizeDeviceVisibility(value: unknown): DeviceVisibility {
  */
 export const TABLET_USER_AGENT_PATTERN = /(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i;
 export const MOBILE_USER_AGENT_PATTERN =
-  /Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/;
+  /Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)|okhttp|CFNetwork/;
+// The last two are the app SDK. It sends no `User-Agent` of its own, so the
+// phone's network stack names itself: Android's `okhttp/4.x`, iOS's
+// `MyApp/1 CFNetwork/… Darwin/…`. Neither said "Mobile", so every app visitor was
+// counted as a desktop in the Live View, the visit projection and an audience.
+// (`isBotUserAgent` never matches them, for the same reason: they are the app.)
 
 export type TargetingDevice = 'desktop' | 'tablet' | 'mobile';
 
@@ -116,6 +121,39 @@ export function targetingDeviceOfUserAgent(userAgent: string): TargetingDevice {
   if (TABLET_USER_AGENT_PATTERN.test(userAgent)) return 'tablet';
   if (MOBILE_USER_AGENT_PATTERN.test(userAgent)) return 'mobile';
   return 'desktop';
+}
+
+/* ------------------------------------------------------------------------ */
+/* App platform (the OS an app runs on)                                      */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * The OS of an APP visit, from the user agent its network stack sends — the
+ * same two patterns for the segment builder (`appPlatformOfUserAgent`), the
+ * visit projection's `journey_daily.platform` and every report that breaks a
+ * visit down by it (as `.source`, in SQL), so no two of them can classify one
+ * app visitor differently. Every app visit is `mobile` to the device
+ * classifier above; this is the split that tells an app merchant something.
+ *
+ * The SDK sends no `User-Agent` of its own: Android's `okhttp/4.x` and iOS's
+ * `MyApp/1 CFNetwork/… Darwin/…` are what the phone names itself. A browser's
+ * user agent names a browser, never an app, so a web visit has NO platform —
+ * including Safari on an iPhone, whose string says `iPhone` but neither of the
+ * two words below.
+ */
+export type AppVisitPlatform = 'ios' | 'android';
+
+/** Android: `okhttp/4.12.0` (matched case-insensitively, `~*` in SQL). */
+export const ANDROID_APP_USER_AGENT_PATTERN = /okhttp/i;
+/** iOS: `MyShop/12 CFNetwork/1494.0.7 Darwin/23.4.0` (case-sensitive, `~` in SQL). */
+export const IOS_APP_USER_AGENT_PATTERN = /CFNetwork|Darwin/;
+
+/** `ios` or `android`; null for anything that is not an app's network stack. */
+export function appPlatformOfUserAgent(userAgent: string | null | undefined): AppVisitPlatform | null {
+  if (!userAgent) return null;
+  if (ANDROID_APP_USER_AGENT_PATTERN.test(userAgent)) return 'android';
+  if (IOS_APP_USER_AGENT_PATTERN.test(userAgent)) return 'ios';
+  return null;
 }
 
 /* ------------------------------------------------------------------------ */

@@ -441,7 +441,8 @@ describe('resolveConflicts', () => {
   });
 
   it('preserves input order, since the host stacks what it is handed', () => {
-    const kept = resolveConflicts([at('z', 'top'), at('m', 'bottom'), at('a', 'center')]);
+    // The third has no dock to compete for (a selector-placed surface is its own scope).
+    const kept = resolveConflicts([at('z', 'top'), at('m', 'bottom'), at('a', 'top', { placementType: 'selector' })]);
     expect(kept.map((s) => s.id)).toEqual(['z', 'm', 'a']);
   });
 });
@@ -583,5 +584,77 @@ describe('resolveSurfaceContent', () => {
       text: '{goal.remaining} kaldı, sepetin {cart.total}',
     });
     expect(resolveSurfaceContent(bar, { behavior: undefined, cart: UNKNOWN, format: {} })).toBe(bar);
+  });
+});
+
+describe('the app’s own reading of a campaign (K8, the content mapping)', () => {
+  const surfaceOf = (type: string, content: Record<string, unknown>, placement: Record<string, unknown> = {}): Surface =>
+    normalizeSurface({ id: 'c', type, contentJson: content, placementConfigJson: placement }, 'campaign') as Surface;
+  const KNOWN = { known: true, total: 200, itemCount: 1, currency: 'TRY' };
+  const resolve = (surface: Surface) => resolveSurfaceContent(surface, { behavior: {}, cart: KNOWN, format: {} })!;
+
+  it('maps the dashboard’s newsletter keys to the ones a renderer reads, after a content state has chosen the words', () => {
+    const shaped = resolve(
+      surfaceOf('newsletter', {
+        headline: 'Bülten',
+        emailPlaceholder: 'a@b.co',
+        successMessage: 'Tamam',
+        buttonText: 'Katıl',
+      })
+    );
+    expect(shaped.content).toMatchObject({ title: 'Bülten', placeholder: 'a@b.co', successText: 'Tamam', buttonText: 'Katıl' });
+  });
+
+  it('maps a state’s own headline, not the base one it replaced', () => {
+    const shaped = resolveSurfaceContent(
+      surfaceOf('newsletter', {
+        headline: 'Normal',
+        states: [
+          {
+            id: 's',
+            name: 'Büyük sepet',
+            when: { match: 'all', rules: [{ signal: 'cartValue', op: 'gte', value: 100 }] },
+            content: { headline: 'Sepetin dolu' },
+          },
+        ],
+      }),
+      { behavior: { cartValue: 200 }, cart: KNOWN, format: {} }
+    )!;
+    expect(shaped.content['title']).toBe('Sepetin dolu');
+  });
+
+  it('keeps the same surface when the content had every key already', () => {
+    const surface = surfaceOf('announcement_bar', { text: 'Merhaba' });
+    expect(resolve(surface).content).toEqual({ text: 'Merhaba' });
+  });
+
+  it('puts the stored position in the type’s own list', () => {
+    expect(surfaceOf('newsletter', {}, { position: 'bottom-right' }).placement.position).toBe('center');
+    expect(surfaceOf('floating_button', {}, { position: 'top-left' }).placement.position).toBe('top-left');
+    expect(surfaceOf('announcement_bar', {}).placement.position).toBe('bottom'); // a bar on an app docks at the bottom by default: it cannot push the host's header
+    expect(surfaceOf('floating_button', {}).placement.position).toBe('bottom-right');
+    expect(surfaceOf('product_view_count', {}).placement.position).toBe('');
+  });
+
+  it('reads the point off the stored selector, and a counter’s default one when none was named', () => {
+    const selector = '[data-selwise-slot="home-top"]';
+    expect(surfaceOf('announcement_bar', {}, { selector }).placement.slot).toBe('home-top');
+    expect(surfaceOf('announcement_bar', {}, { selector: '.price' }).placement.slot).toBeNull();
+    expect(surfaceOf('floating_button', {}, { selector }).placement.slot).toBeNull();
+    expect(surfaceOf('cart_count', {}).placement.slot).toBe('pdp-under-info');
+  });
+
+  it('competes for a point, not for the dock the surface also names', () => {
+    const selector = '[data-selwise-slot="home-top"]';
+    const inPoint = surfaceOf('announcement_bar', {}, { selector });
+    inPoint.id = 'in-point';
+    const docked = surfaceOf('announcement_bar', {});
+    docked.id = 'docked';
+    const another = surfaceOf('announcement_bar', {}, { selector });
+    another.id = 'another';
+    another.placement.priority = 5;
+    const kept = resolveConflicts([inPoint, docked, another]).map((surface) => surface.id);
+    // The docked bar keeps its dock; the two in the point compete, the higher priority wins.
+    expect(kept).toEqual(['docked', 'another']);
   });
 });

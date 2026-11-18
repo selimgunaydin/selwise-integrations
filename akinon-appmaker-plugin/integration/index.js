@@ -11,9 +11,10 @@
  * attribution across the whole app with no per-screen edits, which is the same
  * shape the RelatedDigital and Adjust plugins use in this app.
  *
- * Recommendations are the exception and cannot work that way: they need a
- * place on screen. `Selwise.recommendation()` hands a screen its data and the
- * screen renders it with the app's own components.
+ * Campaigns, recommendations, search and product content are the exception and
+ * cannot work that way: they need a place on screen. `ui/` mounts the SDK's
+ * components with this plugin as their host (`@selwise/react-native/ui`), and
+ * `Selwise.recommendation()` hands a screen its data when it draws its own.
  *
  * ## init() is called for us
  *
@@ -24,11 +25,10 @@
 
 const SelwiseAnalytics = require('./analytics');
 const SelwiseRecommendation = require('./recommendation');
-const { screenUrl, screenPageType, SCREEN_URLS } = require('./screens.js');
+const { screenUrl, screenPageType, screenRouteOf, SCREEN_URLS } = require('./screens.js');
 const { basketCart, cartKey } = require('./cart.js');
+const { markSurfaceAdd, consumeOwnSurfaceAdd, CLAIM_GRACE_MS } = require('./surface-add.js');
 const { productFacts, productKey } = require('./product.js');
-const { setThemeTokens } = require('../ui/styles.js');
-const { fixedCountdownTarget } = require('../ui/countdown.js');
 
 const PLUGIN_KEY = 'selwise-akinon-appmaker';
 
@@ -38,50 +38,25 @@ class SelwisePlugin {
     this.selwise = null;
     this.analytics = null;
     this.ready = null;
-    this.currentScreen = { pageUrl: null, screenName: null };
-    this.screenListeners = new Set();
     this.stopCartFeed = null;
     this.stopProductFeed = null;
-    this.currentProduct = null;
-    this.productListeners = new Set();
     this.stopDeepLinks = null;
+    this.userHashProvider = null;
   }
 
   /**
-   * The screen the visitor is on, and a subscription to it.
-   *
-   * `<SelwiseSurfaces />` renders whatever targets the current screen, so it
-   * needs to re-evaluate on every navigation. This is the only place that
-   * learns about navigation (from App Maker's analytics bus), so it is the
-   * place that publishes it — the alternative is the UI subscribing to that bus
-   * a second time and the two disagreeing about which screen is current.
+   * The screen the app is on, told to the SDK client, which the components read
+   * (`client.on('screen')`): this plugin is the only thing that learns about
+   * navigation (from App Maker's analytics bus), so it is the one place that
+   * says it. The route name travels with it, and the page type the dashboard's
+   * "only on product pages" rules are judged on.
    */
-  getScreen() {
-    return this.currentScreen;
-  }
-
-  onScreenChange(listener) {
-    if (typeof listener !== 'function') return () => {};
-    this.screenListeners.add(listener);
-    // Fire immediately: a component mounting after the navigation event would
-    // otherwise render nothing until the visitor moved again.
-    if (this.currentScreen.pageUrl) listener(this.currentScreen);
-    return () => this.screenListeners.delete(listener);
-  }
-
   setScreen(pageUrl, screenName) {
-    this.currentScreen = {
-      pageUrl: pageUrl,
+    if (!this.selwise || typeof this.selwise.setScreen !== 'function') return;
+    this.selwise.setScreen(pageUrl, {
       screenName: screenName || null,
-      pageType: screenPageType(screenName) || null,
-    };
-    for (const listener of this.screenListeners) {
-      try {
-        listener(this.currentScreen);
-      } catch (error) {
-        log('screen listener failed: ' + ((error && error.message) || error));
-      }
-    }
+      pageType: screenPageType(screenName, this.screenRoutes()) || null,
+    });
   }
 
   init() {
@@ -111,8 +86,9 @@ class SelwisePlugin {
     this.analytics = new SelwiseAnalytics({
       selwise: client,
       config: this.config,
-      onScreen: (pageUrl, screenName) => this.setScreen(pageUrl, screenName),
+      getUserHashProvider: () => this.userHashProvider
     });
+    this.configureStrips();
 
     // Subscribed BEFORE init resolves. The SDK queues what it cannot send yet
     // and the app publishes its first navigation event within milliseconds of
@@ -142,22 +118,48 @@ class SelwisePlugin {
     // context, which has no module registry — so without this there is no way
     // to ask a running app what Selwise thinks is on screen. Debug only: it is
     // a handle onto the visitor's identity and should not exist in a release.
-    if (this.config.debug && typeof global !== 'undefined') {
+    if (this.config.debug === true && typeof global !== 'undefined') {
       global.Selwise = this;
     }
 
-    this.ready = client.init({
-      channelKey,
-      apiKey: this.config.apiKey,
-      ...(storage ? { storage } : {}),
-      // Shows up on every event and order, so Selwise can tell app traffic
-      // from web traffic without inferring it from the user agent.
-      clientPlatform: 'akinon-appmaker',
-      ...(appVersion() ? { clientVersion: appVersion() } : {}),
-      ...(this.config.apiUrl ? { apiUrl: this.config.apiUrl } : {}),
-      ...(this.config.debug ? { debug: true } : {}),
-      ...(this.config.consent ? { consent: this.config.consent } : {})
-    })
+    // Read once. (Two functions, not one with a module name: Metro bundles only a
+    // `require` whose argument is a literal.)
+    const app = appVersion();
+    const plugin = pluginVersion();
+    const platform = osName();
+    // The merchant's language: the config's `locale`, else the app's own current
+    // language, so a campaign, a strip's heading and a search label come in the
+    // language the app is showing. Read before `init()` so the first `/config`
+    // already asks in it.
+    this.ready = resolveLocale(this.config)
+      .then((locale) =>
+        client.init({
+          channelKey,
+          apiKey: this.config.apiKey,
+          ...(storage ? { storage } : {}),
+          // Shows up on every event and order, so Selwise can tell app traffic
+          // from web traffic without inferring it from the user agent.
+          clientPlatform: 'akinon-appmaker',
+          ...(app ? { clientVersion: app } : {}),
+          // Told to the dashboard beside the SDK's own version, so "which plugin and
+          // which app release is this" is a glance there and not a support question.
+          ...(plugin ? { pluginVersion: plugin } : {}),
+          ...(app ? { appVersion: app } : {}),
+          // `ios` / `android`: lets a segment target the OS the app runs on.
+          ...(platform ? { platform } : {}),
+          ...(locale ? { locale } : {}),
+          // A cold start in test mode: the surfaces, strips and enrichment marked for
+          // testing show on THIS device only. Off by default; a release build never sets it.
+          ...(this.config.testMode === true ? { testMode: true } : {}),
+          // A link may put this build in test mode and force an experiment arm
+          // (the dashboard's "Try on a device"). Off unless the build asks for it:
+          // anybody can send a link, and test mode hides every live campaign.
+          ...(this.config.qaLinks === true ? { qaLinks: true } : {}),
+          ...(this.config.apiUrl ? { apiUrl: this.config.apiUrl } : {}),
+          ...(this.config.debug === true ? { debug: true } : {}),
+          ...(this.config.consent ? { consent: this.config.consent } : {})
+        })
+      )
       .then(() => {
         log('initialized for channel ' + channelKey);
         // Seed the screen from the app's own state.
@@ -176,7 +178,6 @@ class SelwisePlugin {
         this.startCartFeed();
         this.startProductFeed();
         this.startAppStateFeed();
-        this.applyBrandTheme();
         return true;
       })
       .catch((error) => {
@@ -188,6 +189,162 @@ class SelwisePlugin {
     // starts the app arrives before init resolves, and it is the one a push
     // or an e-mail campaign is credited by.
     this.stopDeepLinks = subscribeDeepLinks((url) => this.recordDeepLink(url));
+  }
+
+  /**
+   * The visitor's answer to the app's consent dialog.
+   *
+   * When the dashboard's "Ask for consent before tracking" is on, Selwise holds
+   * every event — nothing is sent, and every figure in the dashboard stays at
+   * zero — until the app says what the visitor chose. This is how: call it with
+   * your consent dialog's answer, on every launch that has one and whenever the
+   * visitor changes it.
+   *
+   * ```js
+   * Selwise.setConsent({ granted: true, categories: { analytics: true, marketing: false } });
+   * ```
+   *
+   * The config's `consent` is only the answer a cold start begins with. Resolves
+   * once the answer is stored (and what was held is on its way); `false` when
+   * the plugin is idle or the SDK did not start.
+   */
+  async setConsent(snapshot) {
+    if (!this.selwise || !this.ready) return false;
+    if (!(await this.ready)) return false;
+    try {
+      await this.selwise.setConsent(snapshot);
+      return true;
+    } catch (error) {
+      log('setConsent failed: ' + ((error && error.message) || error));
+      return false;
+    }
+  }
+
+  /**
+   * Whether the dashboard asks for the app's consent before tracking — the
+   * question `setConsent` answers. `true` means nothing is sent until it is
+   * called, so an app that gets `true` here and never calls it measures nothing.
+   * Resolves `false` when the plugin is idle.
+   */
+  async consentRequired() {
+    if (!this.selwise || !this.ready) return false;
+    if (!(await this.ready)) return false;
+    try {
+      return await this.selwise.isConsentRequired();
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Signed identity. When the channel enforces it, an identify is accepted only
+   * with an HMAC of the customer id made by YOUR server, and the secret must
+   * never be in the app — so register a function that asks your own backend:
+   *
+   * ```js
+   * Selwise.setUserHashProvider(async (userId) => {
+   *   const { hash, ts } = await api.post('/selwise/identity', { userId });
+   *   return { userHash: hash, userHashTs: ts };   // or just the hex string
+   * });
+   * ```
+   *
+   * It is asked at every sign-in (App Maker's `currentUser` / `userLogin`),
+   * within 5 seconds; whatever it fails with, the login goes through without a
+   * signature. Pass `null` to remove it.
+   */
+  setUserHashProvider(provider) {
+    this.userHashProvider = typeof provider === 'function' ? provider : null;
+  }
+
+  /**
+   * Whether the OS lets the app notify this person: `'granted'`, `'denied'` or
+   * `'undetermined'` (never asked). Call it at launch and when the answer
+   * changes: a segment can then say "has not allowed notifications", and a
+   * phone registered with `registerPushToken` takes the answer (a phone is sent
+   * a scenario's notification only while it is `'granted'`).
+   */
+  async setPushPermission(state) {
+    if (!this.selwise || !this.ready) return;
+    if (!(await this.ready)) return;
+    if (typeof this.selwise.setPushPermission === 'function') this.selwise.setPushPermission(state);
+  }
+
+  /**
+   * Register this phone for the merchant's app push scenarios.
+   *
+   * App Maker's own messaging plugin (`akinon-firebase-messaging-service`) keeps
+   * the FCM token to itself and publishes it to no other plugin, so the token
+   * is handed over here, from the app's own code:
+   *
+   * ```js
+   * import messaging from '@react-native-firebase/messaging';
+   * const token = await messaging().getToken();
+   * Selwise.registerPushToken({ token, provider: 'fcm' });          // platform is the app's
+   * messaging().onTokenRefresh((next) => Selwise.registerPushToken({ token: next, provider: 'fcm' }));
+   * ```
+   *
+   * `provider` is `'fcm'` (Android, and iOS through Firebase), `'apns'` or
+   * `'expo'`. It needs the visitor's marketing consent (`setConsent`) and
+   * `setPushPermission('granted')`. Resolves `true` when Selwise has the phone;
+   * `false` when the plugin is idle, the SDK has no app push (an older one), the
+   * registration was withheld or a call could not be sent.
+   */
+  async registerPushToken(input) {
+    if (!this.selwise || !this.ready) return false;
+    if (!(await this.ready)) return false;
+    if (typeof this.selwise.registerPushToken !== 'function') return false;
+    try {
+      // The OS the app runs on, unless the call names one (an Expo token on iOS is `ios`).
+      const platform = (input && input.platform) || osName() || undefined;
+      return await this.selwise.registerPushToken({ ...input, ...(platform ? { platform } : {}) });
+    } catch (error) {
+      log('registerPushToken failed: ' + ((error && error.message) || error));
+      return false;
+    }
+  }
+
+  /** The app's own "turn notifications off": Selwise stops notifying this phone. */
+  async unregisterPushToken() {
+    if (!this.selwise || !this.ready) return false;
+    if (!(await this.ready)) return false;
+    if (typeof this.selwise.unregisterPushToken !== 'function') return false;
+    try {
+      return await this.selwise.unregisterPushToken();
+    } catch (error) {
+      log('unregisterPushToken failed: ' + ((error && error.message) || error));
+      return false;
+    }
+  }
+
+  /**
+   * A Selwise notification was tapped: records the messaging click (when it
+   * carries Selwise's attribution) and returns the link it points at, or `null`
+   * for a notification Selwise did not send. A push that goes through App
+   * Maker's messaging plugin needs none of this — set that plugin's
+   * `notification.deepLink.integrationMaps.urlPath` to `data.sw_link` and the
+   * link reaches App Maker's DeepLinkService, which this plugin already listens
+   * to (so the open is attributed) and the app navigates from.
+   */
+  trackPushOpen(payload) {
+    if (!this.selwise || typeof this.selwise.trackPushOpen !== 'function') return null;
+    try {
+      return this.selwise.trackPushOpen(payload);
+    } catch (error) {
+      log('trackPushOpen failed: ' + ((error && error.message) || error));
+      return null;
+    }
+  }
+
+  /**
+   * The app's language changed (`'tr'`, `'en-US'`). The merchant's text — a
+   * campaign, a strip's heading, a search label, an enrichment block — is asked
+   * for again in it, and what is already drawn follows. The config's `locale`,
+   * or else the app's own language at launch, is where it starts.
+   */
+  async setLocale(locale) {
+    if (!this.selwise || !this.ready) return;
+    if (!(await this.ready)) return;
+    this.selwise.setLocale(locale ? String(locale) : undefined);
   }
 
   /**
@@ -209,26 +366,6 @@ class SelwisePlugin {
   }
 
   /**
-   * Hands the site brand theme to the style translator.
-   *
-   * Widget style DEFAULTS are literally `'var(--selwise-brand, #1a1a1a)'`, so
-   * without this every unmodified widget in the app rendered with an
-   * unparseable colour string instead of the merchant's brand. `/config` is
-   * fetched in the background by the SDK, so this is retried on the first
-   * surface fetch rather than assumed to have landed by now.
-   */
-  applyBrandTheme() {
-    if (!this.selwise || typeof this.selwise.getTheme !== 'function') return false;
-
-    const tokens = this.selwise.getTheme();
-    if (!tokens || Object.keys(tokens).length === 0) return false;
-
-    setThemeTokens(tokens);
-    log('brand theme applied (' + Object.keys(tokens).length + ' token(s))');
-    return true;
-  }
-
-  /**
    * Waits for the app's own state to name a screen, once.
    *
    * A single read at init is too early — the app is still booting and
@@ -237,7 +374,8 @@ class SelwisePlugin {
    * never reports one does not leave a listener attached for the session.
    */
   seedInitialScreen() {
-    if (this.currentScreen.pageUrl) return;
+    const client = this.selwise;
+    if (!client || typeof client.getScreen !== 'function' || client.getScreen().pageUrl) return;
 
     const store = requireStore();
     if (!store || typeof store.subscribe !== 'function') return;
@@ -245,8 +383,8 @@ class SelwisePlugin {
     const apply = () => {
       const page = currentPageFromStore();
       if (!page) return false;
-      if (!this.currentScreen.pageUrl) {
-        this.setScreen(screenUrl(page), page);
+      if (!client.getScreen().pageUrl) {
+        this.setScreen(screenUrl(page, this.screenRoutes()), page);
         log('initial screen ' + page + ' (from app state)');
       }
       return true;
@@ -263,7 +401,7 @@ class SelwisePlugin {
     };
 
     unsubscribe = store.subscribe(() => {
-      if (this.currentScreen.pageUrl || apply()) stop();
+      if (client.getScreen().pageUrl || apply()) stop();
     });
 
     // `navigationChange` normally arrives within a second of the first render;
@@ -314,27 +452,6 @@ class SelwisePlugin {
   }
 
   /**
-   * The product the CURRENT screen shows, for `{product.*}` in campaign words
-   * — or `null` on any screen but ProductDetail, and while a product is still
-   * loading there. `<SelwiseSurfaces />` passes it to `getSurfaces`.
-   *
-   * The reducer keeps the last product after the screen is left, so the screen
-   * name is the gate: a banner on the home screen must never say the price of
-   * the product the shopper looked at before.
-   */
-  getProduct() {
-    if (this.currentScreen.screenName !== 'ProductDetail') return null;
-    return this.currentProduct;
-  }
-
-  /** Called when the product on a ProductDetail screen changes. Returns the unsubscribe. */
-  onProductChange(listener) {
-    if (typeof listener !== 'function') return () => {};
-    this.productListeners.add(listener);
-    return () => this.productListeners.delete(listener);
-  }
-
-  /**
    * Hands the app's `AppState` to the SDK (`setAppState`, SDK 1.2.0): the
    * dashboard's Live View counts the user while the app is in the foreground,
    * and the queue is flushed when it leaves. An older SDK has no
@@ -357,111 +474,68 @@ class SelwisePlugin {
 
   /**
    * Follows `state.productDetail` for the session, the way `startCartFeed`
-   * follows the basket: listeners hear about a new product (`productKey`), not
-   * every unrelated action. Reading the product needs no request — the screen
-   * already fetched it.
+   * follows the basket, and tells the SDK the product the CURRENT screen shows
+   * (`client.setProduct`) — for `{product.*}` in campaign words — or `null` on
+   * any screen but ProductDetail, and the pending marker while a product is
+   * still loading there. The components ask for their surfaces again when it
+   * moves; reading the product needs no request, the screen already fetched it.
+   *
+   * The reducer keeps the last product after the screen is left, so the screen
+   * name is the gate: a banner on the home screen must never say the price of
+   * the product the shopper looked at before. The screen is followed too, so
+   * the gate moves with it.
    */
   startProductFeed() {
     if (this.stopProductFeed) return;
+    const client = this.selwise;
+    if (!client || typeof client.setProduct !== 'function') return;
     const store = requireStore();
     if (!store || typeof store.subscribe !== 'function' || typeof store.getState !== 'function') {
       log('app store unavailable — product values will not reach campaigns');
       return;
     }
 
-    let lastKey = null;
-    const apply = () => {
-      let state = null;
-      let facts = null;
+    let state = null;
+    let facts = null;
+    const publish = () => {
+      const onProduct = client.getScreen().screenName === 'ProductDetail';
+      // The key says whether it is another product, or the same one fetched
+      // again: either is worth asking the campaigns about once more.
+      client.setProduct(onProduct ? facts : null, onProduct ? productKey(state, facts) : 'off-screen');
+    };
+    const read = () => {
       try {
         state = store.getState();
         facts = productFacts(state);
       } catch (error) {
         facts = null;
       }
-      const key = productKey(state, facts);
-      if (key === lastKey) return;
-      lastKey = key;
-      this.currentProduct = facts;
-      for (const listener of this.productListeners) {
-        try {
-          listener(facts);
-        } catch (error) {
-          log('product listener failed: ' + ((error && error.message) || error));
-        }
-      }
+      publish();
     };
 
-    apply();
-    this.stopProductFeed = store.subscribe(apply) || (() => {});
+    read();
+    const stopStore = store.subscribe(read) || (() => {});
+    const stopScreen = client.on('screen', publish);
+    this.stopProductFeed = () => {
+      stopStore();
+      stopScreen();
+    };
   }
 
   /**
-   * Where a countdown counts to right now: the SDK's `countdownTarget` (a fixed
-   * end date, or the next daily cutoff in the store's time zone), or the fixed
-   * end date alone on an SDK that predates daily cutoffs.
+   * Hands the config's `recommendation.placements` to the SDK's strip service,
+   * once, so the ready-made components and `recommendation()` agree on which
+   * widgets belong on which screen.
    */
-  countdownTarget(content, now) {
-    const sdk = this.sdkModule();
-    const at = typeof now === 'number' ? now : Date.now();
-    if (sdk && typeof sdk.countdownTarget === 'function') {
-      try {
-        return sdk.countdownTarget(content || {}, at);
-      } catch (error) {
-        return null;
-      }
-    }
-    return fixedCountdownTarget(content);
-  }
-
-  /**
-   * The goal-bar steps passed between two views of one bar — the SDK's
-   * statement of "crossed while the bar was visible". Nothing on an SDK that
-   * predates the goal bar, which also has no `resolveGoalBar` to draw one.
-   */
-  goalStepsCrossed(previous, next) {
-    const sdk = this.sdkModule();
-    if (!sdk || typeof sdk.goalStepsCrossed !== 'function') return [];
-    return sdk.goalStepsCrossed(previous, next) || [];
-  }
-
-  sdkModule() {
-    if (this.sdkModuleCache === undefined) this.sdkModuleCache = requireSdkModule();
-    return this.sdkModuleCache;
-  }
-
-  /**
-   * The SDK's `RecommendationWidgetLoader` (0.10.0+) — the object
-   * `useRecommendationWidget` runs on — or null on an older SDK, where
-   * `<RecommendationStrips />` asks every strip once per screen, as before.
-   */
-  recommendationLoader() {
-    const sdk = this.sdkModule();
-    const Loader = sdk && sdk.RecommendationWidgetLoader;
-    return typeof Loader === 'function' ? Loader : null;
+  configureStrips() {
+    const placements = this.config && this.config.recommendation && this.config.recommendation.placements;
+    const strips = this.selwise && this.selwise.strips;
+    if (placements && strips && typeof strips.setPlacements === 'function') strips.setPlacements(placements);
   }
 
   /** The data side of recommendations. Safe to call before `init()` resolves. */
   recommendation() {
     return new SelwiseRecommendation({ selwise: this.selwise, config: this.config });
-  }
-
-  /**
-   * Newsletter signup from a newsletter widget.
-   *
-   * Here rather than in the renderer so the surface id travels with it: the
-   * widget's own report is what a merchant looks at to see whether the form
-   * converted, and without the id the signup lands attributed to nothing.
-   */
-  async subscribeNewsletter(email, surface) {
-    if (!this.selwise) return { success: false };
-    await this.ready;
-    return this.selwise
-      .subscribeNewsletter(email, surface ? { surfaceId: surface.id } : {})
-      .catch((error) => {
-        log('newsletter signup failed: ' + ((error && error.message) || error));
-        return { success: false };
-      });
   }
 
   /** Search, for a screen that wants Selwise results instead of the storefront's. */
@@ -507,31 +581,126 @@ class SelwisePlugin {
    * why the tracked event carries whichever code was given: the merchant can
    * see in their own report that the wrong one is being sent.
    */
-  async addToCartFromSurface(surface, code, quantity) {
-    const cartCode = String(code || '').trim();
-    if (!cartCode) return false;
-    const count = Number.isFinite(Number(quantity)) && Number(quantity) > 0 ? Math.floor(Number(quantity)) : 1;
+  async addToCartFromSurface(surface, code, quantity, source) {
+    return (await this.addToCartDetailed(surface, code, quantity, source)).success;
+  }
 
-    if (this.selwise) {
-      this.selwise.trackAddToCart(cartCode, {
-        quantity: count,
-        source: 'custom_widget',
-        surfaceId: (surface && surface.id) || '',
-      });
-    }
+  /**
+   * `addToCartFromSurface` with the reason: `{ success, message? }`, where
+   * `message` is the storefront's own sentence for a refusal (the basket's
+   * `apiError`: "Bu ürün 0 adetten fazla satın alınamaz."), read from the app's
+   * store. The SDK's host contract takes it (`SelwiseCartResult.message`) and
+   * shows it where the add was pressed; without it a refused add looked like
+   * nothing had happened. `message` is absent when the store gave none.
+   */
+  async addToCartDetailed(surface, code, quantity, source) {
+    const cartCode = String(code || '').trim();
+    if (!cartCode) return { success: false };
+    const count = Number.isFinite(Number(quantity)) && Number(quantity) > 0 ? Math.floor(Number(quantity)) : 1;
 
     const basket = requireBasketActions();
     const store = requireStore();
     if (!basket || !store || typeof basket.addToCart !== 'function') {
       log('cannot add to cart: the app basket container is unavailable');
-      return false;
+      return { success: false };
     }
 
+    // One read before the add and one after: the count says whether it went
+    // in, and the error is read only when THIS add replaced it, so a sentence
+    // left by an earlier failure is never shown for a later one that recorded none.
+    const stateBefore = basketState(store);
+    const before = basketQuantity(stateBefore);
+    const errorBefore = basketError(stateBefore);
+    // The app publishes `cartChanges` from inside the dispatch, so the mark has
+    // to exist before it: the mapper then writes the one add_to_cart, with this
+    // surface as its source.
+    const ownMark = markSurfaceAdd({ source: source || 'custom_widget', surfaceId: (surface && surface.id) || '' });
+    let thrown = null;
     try {
-      await store.dispatch(basket.addToCart({ pk: cartCode }, count, { modal: true }));
+      // A snackbar, not the basket's `modal`: the modal is drawn only by the
+      // product screen, so a widget on the home or a list added silently and the
+      // modal then appeared, stale, on the next product page.
+      await store.dispatch(basket.addToCart({ pk: cartCode }, count, { snackbar: this.addedSnackbar() }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Neither resolving nor throwing is the verdict; the basket's own count is.
+    // The framework's `addToCart` swallows a refusal (it records the error in
+    // the basket state and resolves), and an app's override can throw AFTER the
+    // line went in — one called an action creator that was never defined, so
+    // every add threw after the server had accepted it (2026-11-18). A count
+    // that went up is an add; one that cannot be read takes the dispatch at its
+    // word (no throw = added).
+    const stateAfter = basketState(store);
+    const after = basketQuantity(stateAfter);
+    const added = before !== null && after !== null ? after > before : thrown === null;
+    if (!added) {
+      consumeOwnSurfaceAdd(ownMark);
+      log(thrown ? 'add to cart failed: ' + ((thrown && thrown.message) || thrown) : 'add to cart refused: the basket did not change');
+      // A thrown error's own text is a developer's, not the shopper's; the
+      // store's `apiError`, when the basket recorded one, is the storefront's.
+      const message = basketRefusalMessage(stateAfter, errorBefore);
+      return message ? { success: false, message } : { success: false };
+    }
+    if (thrown) log('the app basket threw after the add went in: ' + ((thrown && thrown.message) || thrown));
+
+    // The mapper writes the one add_to_cart when the app publishes
+    // `cartChanges` — and an app may publish it AFTER this dispatch settles
+    // (measured on a live App Maker app: the event arrived after the action
+    // returned). Taking the mark now would count the add twice, so the mapper
+    // gets a grace period; only a mark still unclaimed after it means the app
+    // published nothing, and the surface writes the event itself.
+    setTimeout(() => {
+      const unclaimed = consumeOwnSurfaceAdd(ownMark);
+      if (unclaimed && this.selwise) {
+        this.selwise.trackAddToCart(cartCode, {
+          quantity: count,
+          source: unclaimed.source,
+          surfaceId: unclaimed.surfaceId,
+        });
+      }
+    }, CLAIM_GRACE_MS);
+    return { success: true };
+  }
+
+  /**
+   * What the app's snackbar says after a widget's add. The app's own words
+   * (`$B.ADDED_TO_CART`) are not reachable from a plugin, so the merchant's
+   * `addedText` wins and otherwise the phone's language picks one of two.
+   */
+  addedSnackbar() {
+    const configured = this.config && typeof this.config.addedText === 'string' ? this.config.addedText.trim() : '';
+    return { text: configured || defaultAddedText(), type: 'success' };
+  }
+
+  /**
+   * Opens any link a Selwise surface, strip or notification points at, the way
+   * the app would: one of the app's own screens (`app://basket` → the App Maker
+   * route it is mapped from, the `screenRoutes` config first), else a storefront
+   * path or url through the app's deep-link map (`openStorefrontPath`).
+   *
+   * Resolves false when nothing could be opened — a screen that needs to know
+   * which one (`app://product`), or a route the app does not have.
+   */
+  async openLink(url) {
+    const link = String(url || '').trim();
+    if (!link) return false;
+    if (/^app:\/\//i.test(link)) return this.openScreen(link);
+    return this.openStorefrontPath(link);
+  }
+
+  /** Opens one of the app's own screens by its Selwise address (`openLink`). */
+  openScreen(url) {
+    const route = screenRouteOf(url, this.screenRoutes());
+    if (!route) return false;
+    const navigation = requireNavigation();
+    if (!navigation || typeof navigation.navigate !== 'function') return false;
+    try {
+      navigation.navigate(route);
       return true;
     } catch (error) {
-      log('add to cart failed: ' + ((error && error.message) || error));
+      log('could not open screen ' + url);
       return false;
     }
   }
@@ -603,28 +772,9 @@ class SelwisePlugin {
     return this.selwise.getEnrichmentSlots();
   }
 
-  /**
-   * Base typography for an enrichment document.
-   *
-   * A block with no styling of its own should look like it belongs to the app,
-   * not like a browser default. Read from the site brand theme so a merchant
-   * who set their colours once gets them here too; every merchant rule can
-   * still override any of it.
-   */
-  enrichmentTheme() {
-    const tokens =
-      this.selwise && typeof this.selwise.getTheme === 'function' ? this.selwise.getTheme() : {};
-    const configured = (this.config && this.config.enrichment) || {};
-
-    return {
-      background: configured.background || 'transparent',
-      textColor: configured.textColor || tokens['--selwise-text'] || '',
-      fontFamily: configured.fontFamily || tokens['--selwise-font'] || '',
-      fontSize: configured.fontSize || '14px',
-      padding: configured.padding || '0px',
-      // So a relative image (`/media/size-chart.png`) in a block resolves against the shop.
-      baseUrl: storefrontOrigin() || '',
-    };
+  /** The merchant's own origin, so a relative image in an enrichment block resolves against the shop. */
+  storefrontUrl() {
+    return storefrontOrigin() || '';
   }
 
   /**
@@ -658,7 +808,12 @@ class SelwisePlugin {
   }
 
   screenUrl(screenName) {
-    return screenUrl(screenName);
+    return screenUrl(screenName, this.screenRoutes());
+  }
+
+  /** The app's own route for each Selwise screen address (`screenRoutes` in the config), when it set any. */
+  screenRoutes() {
+    return (this.config && this.config.screenRoutes) || undefined;
   }
 }
 
@@ -717,6 +872,128 @@ function currentPageFromStore() {
     return typeof page === 'string' && page.trim() ? page.trim() : '';
   } catch (error) {
     return '';
+  }
+}
+
+/** The first non-empty sentence of a string or an array of them, else ''. */
+function firstSentence(value) {
+  const list = Array.isArray(value) ? value : [value];
+  for (let i = 0; i < list.length; i += 1) {
+    if (typeof list[i] === 'string' && list[i].trim()) return list[i].trim();
+  }
+  return '';
+}
+
+/** The app's redux state, or {} when the store cannot be read. */
+function basketState(store) {
+  try {
+    return (store && typeof store.getState === 'function' && store.getState()) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+/** What the app basket holds as its error, or null. */
+function basketError(state) {
+  return (state && state.basket && state.basket.error) || null;
+}
+
+/**
+ * Why the storefront refused the last add, in its own words — or '' when the
+ * store does not say. The framework's basket action does not throw on a
+ * refusal: it records the API's answer in `state.basket.error.apiError`, whose
+ * sentence is `nonFieldErrors` (a string or a list) or `nonFieldMessage`. Read
+ * defensively: this is the app's private state, and a shape that moved must
+ * cost the message, never the add's answer.
+ */
+function basketRefusalMessage(state, errorBefore) {
+  try {
+    const error = basketError(state);
+    // The reducer writes a new object on every rejection; the same one means
+    // this add recorded nothing.
+    if (error === errorBefore) return '';
+    const api = (error && error.apiError) || error;
+    if (!api || typeof api !== 'object') return '';
+    return (
+      firstSentence(api.nonFieldErrors) ||
+      firstSentence(api.nonFieldMessage) ||
+      firstSentence(api.non_field_errors) ||
+      firstSentence(api.detail)
+    );
+  } catch (error) {
+    return '';
+  }
+}
+
+/** The app basket's unit count, or null when the state does not say. */
+function basketQuantity(state) {
+  try {
+    const total = Number(state.basket && state.basket.basket && state.basket.basket.totalQuantity);
+    return Number.isFinite(total) ? total : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+let cachedAddedText = null;
+
+function defaultAddedText() {
+  if (cachedAddedText) return cachedAddedText;
+  let locale = '';
+  try {
+    locale = String(Intl.DateTimeFormat().resolvedOptions().locale || '').toLowerCase();
+  } catch (error) {
+    locale = '';
+  }
+  cachedAddedText = locale.indexOf('tr') === 0 ? 'Sepetinize eklendi' : 'Added to your cart';
+  return cachedAddedText;
+}
+
+/**
+ * The language the SDK asks the merchant's text in: the config's `locale`, else
+ * the app's current language (App Maker's language service), else none — and the
+ * account's default applies. Never rejects and never waits long: a service that
+ * is missing or slow costs the app its language, not its launch.
+ */
+function resolveLocale(config) {
+  const configured = config && typeof config.locale === 'string' ? config.locale.trim() : '';
+  if (configured) return Promise.resolve(configured);
+
+  const Language = requireLanguageService();
+  if (!Language || typeof Language.getCurrent !== 'function') return Promise.resolve('');
+
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), LANGUAGE_TIMEOUT_MS);
+  });
+  const settle = (language) => {
+    clearTimeout(timer);
+    if (!language) return '';
+    const code = typeof language === 'string' ? language : language.code || language.key;
+    return typeof code === 'string' ? code.trim() : '';
+  };
+  return Promise.race([Promise.resolve().then(() => Language.getCurrent()), timeout]).then(settle, () => settle(null));
+}
+
+const LANGUAGE_TIMEOUT_MS = 1500;
+
+function requireLanguageService() {
+  try {
+    // eslint-disable-next-line global-require
+    const imported = require('@services/language');
+    return imported && (imported.default || imported);
+  } catch (error) {
+    return null;
+  }
+}
+
+function requireNavigation() {
+  try {
+    // eslint-disable-next-line global-require
+    const imported = require('@core/navigation');
+    return (imported && (imported.default || imported)) || null;
+  } catch (error) {
+    return null;
   }
 }
 
@@ -858,6 +1135,26 @@ function requireAsyncStorage() {
     return (imported && (imported.default || imported)) || null;
   } catch (error) {
     return null;
+  }
+}
+
+/** `ios` or `android` from React Native's `Platform.OS`; '' when it cannot be read (a test, a web build). */
+function osName() {
+  try {
+    // eslint-disable-next-line global-require
+    const os = require('react-native').Platform.OS;
+    return os === 'ios' || os === 'android' ? os : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+function pluginVersion() {
+  try {
+    // eslint-disable-next-line global-require
+    return require('../package.json').version || '';
+  } catch (error) {
+    return '';
   }
 }
 

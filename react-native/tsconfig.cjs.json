@@ -1,10 +1,10 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    "module": "Node16",
+    "moduleResolution": "Node16",
     "outDir": "dist/cjs",
     "types": ["node"]
   },
-  "exclude": ["dist", "node_modules", "**/*.spec.ts", "**/*.spec.tsx"]
+  "exclude": ["dist", "node_modules", "**/*.spec.ts", "**/*.spec.tsx", "**/*.mock.ts", "src/ui/test/**"]
 }

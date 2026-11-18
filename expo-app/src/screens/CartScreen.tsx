@@ -2,17 +2,19 @@ import { useEffect, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { CURRENCY, formatPrice, selwise } from '../selwise';
 import { useStore } from '../store';
-import { Strips } from '../components/Strip';
-import { Surfaces } from '../components/Surfaces';
+import { SelwiseEnrichment, SelwiseSlot } from '@selwise/react-native/ui';
+import { useNavigation } from '../navigation';
 import { Button, colors, Section, styles } from '../ui';
 
 /**
- * The basket screen: campaigns that speak about the cart (a goal bar), a
- * "complete your basket" strip, and the order. `trackOrder` is AWAITED — a
+ * The basket screen: campaigns that speak about the cart (a goal bar, drawn by
+ * the overlay in App.tsx), the points a "complete your basket" strip can go to,
+ * and the order. `trackOrder` is AWAITED — a
  * lost order is lost attribution — and idempotent on `orderId`.
  */
 export function CartScreen() {
   const { lines, total, itemCount, remove, clear, customer } = useStore();
+  const { openProduct } = useNavigation();
   const [placed, setPlaced] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -37,7 +39,6 @@ export function CartScreen() {
 
   return (
     <ScrollView>
-      <Surfaces screen="app://basket" />
       <Section title={`Sepet (${itemCount})`}>
         {placed ? <Text style={{ color: colors.accent, marginBottom: 8 }}>Sipariş alındı: {placed}</Text> : null}
         {lines.length === 0 ? <Text style={styles.muted}>Sepetiniz boş.</Text> : null}
@@ -52,6 +53,7 @@ export function CartScreen() {
             </Text>
           </View>
         ))}
+        <SelwiseSlot screen="app://basket" slot="basket-under-items" onProductPress={openProduct} />
         {lines.length > 0 ? (
           <View style={{ marginTop: 12, gap: 8 }}>
             <Text style={{ fontSize: 16, fontWeight: '600' }}>Toplam {formatPrice(total)}</Text>
@@ -59,7 +61,9 @@ export function CartScreen() {
           </View>
         ) : null}
       </Section>
-      <Strips screen="app://basket" />
+      {/* A merchant's shipping note, placed by name in the panel; it needs a product to read, so the first line's. */}
+      {lines[0] ? <SelwiseEnrichment code={lines[0].product.itemCode} slot="basket-shipping" style={{ marginHorizontal: 16 }} /> : null}
+      <SelwiseSlot screen="app://basket" slot="basket-bottom" onProductPress={openProduct} />
     </ScrollView>
   );
 }

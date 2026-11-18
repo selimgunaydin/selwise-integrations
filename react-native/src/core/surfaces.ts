@@ -1,4 +1,4 @@
-import { evaluateTargeting, type BehaviorSnapshot, type TargetingContext } from '../vendor/page-targeting.js';
+import { targetingMiss, type BehaviorSnapshot, type TargetingContext } from '../vendor/page-targeting.js';
 import {
   fillContentPlaceholders,
   resolveCampaignContent,
@@ -9,6 +9,8 @@ import {
 } from '../vendor/dynamic-content.js';
 import type { FrequencyCapConfig } from './eligibility.js';
 import { resolveCampaignForDevice } from '../vendor/campaign-devices.js';
+import { APP_SCREENS, appSlotOfSelector } from '../vendor/app-surfaces.js';
+import { appWidgetPlacement, normalizeAppSurfaceContent } from '../vendor/app-placement.js';
 import {
   decodeDismissal,
   dismissalHolds,
@@ -18,6 +20,7 @@ import {
 } from '../vendor/campaign-interaction.js';
 import type { SelwiseStorage } from '../types.js';
 import { STORAGE_KEYS } from './storage.js';
+import { asRecord } from './records.js';
 
 /**
  * Campaigns and widgets — everything `/config` describes as something to put on
@@ -35,10 +38,9 @@ import { STORAGE_KEYS } from './storage.js';
  *
  * ## What this deliberately does NOT do
  *
- * Render. The SDK has no UI (see `react/index.ts`): an Akinon App Maker app
- * owns its own themed components, and a Selwise-drawn banner would look foreign
- * beside them. This decides WHAT should be on screen and leaves the drawing to
- * the host.
+ * Draw. This decides WHAT should be on screen; `@selwise/react-native/ui`
+ * (`<SelwiseSurfaces />`) draws it, and a host that wants its own look draws it
+ * itself from what this returns.
  */
 
 /**
@@ -52,7 +54,21 @@ export type SurfaceKind = 'campaign' | 'widget';
 export type TriggerStrategy = 'immediate' | 'delay' | 'scroll' | 'exit_intent' | 'event';
 
 export interface SurfacePlacement {
+  /**
+   * Where the surface is drawn, as the type's own list offers it
+   * (`APP_WIDGET_PLACEMENT`): a dock's `top` / `bottom`, a floating button's
+   * corner, a modal's `center` / `bottom` / `right` / `left`. A stored value the
+   * type does not offer (a website's `bottom-right` newsletter) reads as the
+   * type's default; empty for a surface that lives only in a slot.
+   */
   position: string;
+  /**
+   * The named point (`<SelwiseSlot slot>`) the surface is drawn at instead of
+   * docking or floating, or null. Read from the selector the dashboard writes
+   * for a slot (`[data-selwise-slot="pdp-under-info"]`); a counter that has no
+   * place but a point reads the type's default one when the merchant named none.
+   */
+  slot: string | null;
   placementType: string;
   triggerStrategy: TriggerStrategy;
   triggerDelaySeconds: number;
@@ -84,7 +100,7 @@ export interface Surface {
    * They were dropped here, so a `custom` widget written in those fields
    * rendered an empty box in the app while working on the web. A host renders
    * them for a `custom` surface; for a native type there is no DOM to apply
-   * them to, which `ui/visibility.js` reports rather than silently ignores.
+   * them to, which `ui/visibility.ts` reports rather than silently ignores.
    */
   customCss: string;
   customJs: string;
@@ -97,6 +113,13 @@ export interface Surface {
    * the merchant never chose.
    */
   rawPlacement: Record<string, unknown>;
+  /**
+   * Set on a surface that came from a scenario's "show in the app" step
+   * (`getScenarioSurfaces`). The scenario's ids ride on the ONE impression,
+   * click and close this surface records, as the browser widget sends them, so
+   * attribution counts a scenario impression once and credits the scenario.
+   */
+  scenario?: { scenarioId: string; runId: string; nodeId: string; deliveryId: string };
   /** Set when a `config_override` variant shaped this surface. */
   experiment: { experimentId: string; variantId: string } | null;
   /**
@@ -115,6 +138,7 @@ export interface Surface {
 
 const DEFAULT_PLACEMENT: SurfacePlacement = {
   position: 'top',
+  slot: null,
   placementType: 'fixed',
   triggerStrategy: 'immediate',
   triggerDelaySeconds: 0,
@@ -174,12 +198,6 @@ function normalizeTriggerStrategy(value: unknown, surfaceType?: string): Trigger
   return surfaceType === POPUP_TYPE ? POPUP_DEFAULT_TRIGGER : 'immediate';
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -195,7 +213,7 @@ function asNumber(value: unknown, fallback: number): number {
  * Copied key by key rather than passed through: an unknown key would look like
  * a rule the app honours and silently would not.
  */
-function normalizeFrequencyCap(value: unknown): FrequencyCapConfig | null {
+export function normalizeFrequencyCap(value: unknown): FrequencyCapConfig | null {
   const raw = asRecord(value);
   const cap: FrequencyCapConfig = {};
 
@@ -210,6 +228,49 @@ function normalizeFrequencyCap(value: unknown): FrequencyCapConfig | null {
   return Object.keys(cap).length > 0 ? cap : null;
 }
 
+/** The website's floating-button spellings, read as the corner they were drawn in (the widget's own mapping). */
+const FLOATING_ALIASES: Readonly<Record<string, string>> = {
+  top: 'top-right',
+  bottom: 'bottom-right',
+  left: 'bottom-left',
+  right: 'bottom-right',
+};
+
+/**
+ * The position a surface of `type` is drawn at: the stored one when the type
+ * offers it (`APP_WIDGET_PLACEMENT`), the website's spelling of a corner for the
+ * floating button, else the type's default. A type this package has no table
+ * for (`popup`, `modal`) keeps what was stored.
+ */
+function placementPosition(type: string | undefined, stored: unknown): string {
+  const known = type ? appWidgetPlacement(type) : null;
+  const text = asString(stored, '').toLowerCase();
+  if (!known) return text || DEFAULT_PLACEMENT.position;
+  if (known.positions.includes(text)) return text;
+  const aliased = type === 'floating_button' ? FLOATING_ALIASES[text] : undefined;
+  if (aliased && known.positions.includes(aliased)) return aliased;
+  return known.defaultPosition;
+}
+
+/** Every point some screen of the catalogue has. */
+const KNOWN_SLOTS: ReadonlySet<string> = new Set(APP_SCREENS.flatMap((screen) => screen.slots));
+
+/**
+ * The point a surface of `type` is drawn at, from the selector the dashboard
+ * stored. Only a point the catalogue has counts: a selector left over from a
+ * website form (`.price`, `main`) names no point and docks the surface instead
+ * of making it disappear. A type that cannot be placed in a point reads none; a
+ * counter, which has no place but a point, reads the type's default when none
+ * was named.
+ */
+function placementSlot(type: string | undefined, selector: unknown): string | null {
+  const known = type ? appWidgetPlacement(type) : null;
+  if (!known || known.slot === 'none') return null;
+  const named = appSlotOfSelector(typeof selector === 'string' ? selector : '');
+  if (named && KNOWN_SLOTS.has(named)) return named;
+  return known.slot === 'required' ? known.defaultSlot ?? null : null;
+}
+
 export function normalizePlacement(value: unknown, surfaceType?: string): SurfacePlacement {
   const raw = asRecord(value);
   const conflict = asRecord(raw.conflictResolution);
@@ -220,7 +281,8 @@ export function normalizePlacement(value: unknown, surfaceType?: string): Surfac
     : null;
 
   return {
-    position: asString(raw.position, DEFAULT_PLACEMENT.position),
+    position: placementPosition(surfaceType, raw.position),
+    slot: placementSlot(surfaceType, raw.selector),
     placementType: asString(raw.placementType, DEFAULT_PLACEMENT.placementType),
     triggerStrategy,
     triggerDelaySeconds: Math.max(
@@ -308,14 +370,29 @@ export interface SurfaceFilter extends TargetingContext {
  * behaves. Getting that backwards means a merchant's unfinished campaign goes
  * live to everyone.
  */
-export function selectSurfaces(surfaces: Surface[], filter: SurfaceFilter): Surface[] {
+export function selectSurfaces(
+  surfaces: Surface[],
+  filter: SurfaceFilter,
+  /**
+   * Told which surface was left out and why, as `Selwise.explain()` reports it.
+   * It is told by THIS function, from the condition that left it out — there is
+   * no second pass that could disagree.
+   */
+  onReject?: (surface: Surface, reason: SurfaceRejection) => void
+): Surface[] {
   const dismissed = new Set(filter.dismissedIds ?? []);
   const testMode = filter.testMode === true;
 
   return surfaces.filter((surface) => {
-    if (surface.isTestMode !== testMode) return false;
-    if (dismissed.has(surface.id)) return false;
-    return evaluateTargeting(surface.targeting, {
+    if (surface.isTestMode !== testMode) {
+      onReject?.(surface, 'test');
+      return false;
+    }
+    if (dismissed.has(surface.id)) {
+      onReject?.(surface, 'dismissed');
+      return false;
+    }
+    const miss = targetingMiss(surface.targeting, {
       pageUrl: filter.pageUrl,
       // Forwarded, never derived. On the web the widget resolves a page KIND
       // from the URL and then the DOM; an app has neither, so the only thing
@@ -327,8 +404,14 @@ export function selectSurfaces(surfaces: Surface[], filter: SurfaceFilter): Surf
       country: filter.country,
       behavior: filter.behavior,
     });
+    if (miss === null) return true;
+    onReject?.(surface, miss === 'page' ? 'screens' : miss);
+    return false;
   });
 }
+
+/** Why `selectSurfaces` left a surface out. */
+export type SurfaceRejection = 'test' | 'dismissed' | 'screens' | 'device' | 'country' | 'behavior';
 
 export interface SurfaceContentContext {
   /** The snapshot targeting evaluated — the same one decides the state. */
@@ -337,6 +420,19 @@ export interface SurfaceContentContext {
   /** The product on screen, from the host — unknown on any other screen. */
   product?: DynamicProduct | null;
   format: DynamicFormat;
+}
+
+/**
+ * The content with the keys a renderer reads added (`normalizeAppSurfaceContent`),
+ * or the very same object when it had them all — a surface that needed nothing
+ * keeps its identity, so nothing downstream is invalidated for no change.
+ */
+function withAppContent(type: string, content: Record<string, unknown>): Record<string, unknown> {
+  const mapped = normalizeAppSurfaceContent(type, content);
+  const keys = Object.keys(mapped);
+  return keys.length === Object.keys(content).length && keys.every((key) => mapped[key] === content[key])
+    ? content
+    : mapped;
 }
 
 /**
@@ -382,6 +478,10 @@ export function resolveSurfaceContent(
     content = filled.content;
   }
 
+  // The keys a renderer reads, from the keys the dashboard writes (`headline` →
+  // `title`, `emailPlaceholder` → `placeholder`, …): AFTER the state, so a state's
+  // own words are the ones that get mapped.
+  content = withAppContent(surface.type, content);
   if (content === surface.content && stateId === surface.stateId) return surface;
   return { ...surface, content, stateId };
 }
@@ -409,7 +509,13 @@ export function resolveConflicts(
     const position = surface.placement.placementType === 'selector'
       ? ''
       : surface.placement.position.trim().toLowerCase();
-    const scope = position ? `fixed:${position}` : `entity:${surface.id}`;
+    // A surface in a point competes for THAT point, whatever position its row
+    // also carries; one in a dock, a corner or a modal slot, for its position.
+    const scope = surface.placement.slot
+      ? `slot:${surface.placement.slot}`
+      : position
+        ? `fixed:${position}`
+        : `entity:${surface.id}`;
 
     const group = groups.get(scope);
     if (group) group.push(surface);

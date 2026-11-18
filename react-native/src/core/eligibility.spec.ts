@@ -88,6 +88,103 @@ describe('SegmentGate', () => {
     expect(evaluate).toHaveBeenCalledTimes(2);
   });
 
+  it('asks the union of every audience\'s segments in ONE request', async () => {
+    const evaluate = jest.fn(async (ids: string[], _context?: { pageUrl?: string }) =>
+      Object.fromEntries(ids.map((id) => [id, id === 'seg-2']))
+    );
+    const gate = new SegmentGate(evaluate);
+
+    const verdicts = await gate.shouldShowMany(
+      [
+        { mode: 'include', segmentIds: ['seg-1'] },
+        { mode: 'include', segmentIds: ['seg-1', 'seg-2'] },
+        { mode: 'exclude', segmentIds: ['seg-2'] },
+        { mode: 'all', segmentIds: ['seg-3'] },
+        { mode: 'include', segmentIds: [] },
+      ],
+      { pageUrl: 'Home' }
+    );
+
+    expect(verdicts).toEqual([false, true, false, true, true]);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect([...(evaluate.mock.calls[0]?.[0] ?? [])].sort()).toEqual(['seg-1', 'seg-2']);
+    expect(evaluate.mock.calls[0]?.[1]).toEqual({ pageUrl: 'Home' });
+  });
+
+  it('asks only for the segments it does not already know', async () => {
+    const evaluate = jest.fn(async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, true])));
+    const gate = new SegmentGate(evaluate);
+
+    await gate.shouldShow('include', ['seg-1']);
+    await gate.shouldShowMany([{ mode: 'include', segmentIds: ['seg-1', 'seg-2'] }]);
+
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(evaluate.mock.calls[1]?.[0]).toEqual(['seg-2']);
+  });
+
+  it('shares one request between callers that ask at the same time', async () => {
+    let release: (value: Record<string, boolean>) => void = () => undefined;
+    const evaluate = jest.fn(
+      () => new Promise<Record<string, boolean>>((resolve) => { release = resolve; })
+    );
+    const gate = new SegmentGate(evaluate);
+
+    const first = gate.shouldShow('include', ['seg-1']);
+    const second = gate.shouldShow('include', ['seg-1']);
+    const third = gate.shouldShowMany([{ mode: 'exclude', segmentIds: ['seg-1'] }]);
+    release({ 'seg-1': true });
+
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    await expect(third).resolves.toEqual([false]);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares a failed request too, and asks again afterwards', async () => {
+    let fail = true;
+    let release: () => void = () => undefined;
+    const evaluate = jest.fn(
+      () =>
+        new Promise<Record<string, boolean>>((resolve, reject) => {
+          release = () => (fail ? reject(new Error('offline')) : resolve({ 'seg-1': true }));
+        })
+    );
+    const gate = new SegmentGate(evaluate);
+
+    const a = gate.shouldShow('include', ['seg-1']);
+    const b = gate.shouldShow('exclude', ['seg-1']);
+    release();
+    await expect(a).resolves.toBe(false);
+    await expect(b).resolves.toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+
+    fail = false;
+    const c = gate.shouldShow('include', ['seg-1']);
+    release();
+    await expect(c).resolves.toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an answer under the identity it was asked for', async () => {
+    let user: string | undefined;
+    let release: (value: Record<string, boolean>) => void = () => undefined;
+    const evaluate = jest.fn(
+      () => new Promise<Record<string, boolean>>((resolve) => { release = resolve; })
+    );
+    const gate = new SegmentGate(evaluate, 60_000, Date.now, () => user);
+
+    const pending = gate.shouldShow('include', ['seg-1']);
+    user = 'vip'; // signs in while the anonymous request is in flight
+    release({ 'seg-1': true });
+    await pending;
+
+    // The anonymous answer must not serve the signed-in shopper.
+    const asked = gate.shouldShow('include', ['seg-1']);
+    release({ 'seg-1': false });
+    await expect(asked).resolves.toBe(false);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+
   it('does not cache a failed lookup', async () => {
     let fail = true;
     const evaluate = jest.fn(async () => {

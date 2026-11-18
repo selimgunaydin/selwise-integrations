@@ -13,6 +13,7 @@
 
 import { readControlGroupConfig, type ControlGroupConfig } from '../vendor/control-group.js';
 import { consentDecisionRequired } from '../vendor/consent-categories.js';
+import { asRecord } from './records.js';
 
 export interface RemoteTrackingConfig {
   batchSize?: number;
@@ -111,12 +112,6 @@ export interface RemoteConfig {
    * `isInControlGroup` — see `SelwiseClient.inControlGroup`.
    */
   controlGroup: ControlGroupConfig | null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function positiveInt(value: unknown): number | undefined {

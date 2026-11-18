@@ -75,6 +75,16 @@ export class ConsentManager {
     return !this.decided;
   }
 
+  /** The channel's policy waits for a decision (`/config`, or the policy an earlier launch stored). */
+  isDecisionRequired(): boolean {
+    return this.requiresDecision;
+  }
+
+  /** The channel waits for a decision and none has been given: events are held, nothing is sent. */
+  isAwaitingDecision(): boolean {
+    return this.requiresDecision && !this.decided;
+  }
+
   private effective(): ConsentSnapshot {
     return this.requiresDecision && !this.decided ? AWAITING_DECISION : this.snapshot;
   }

@@ -1,5 +1,7 @@
 import type { SelwiseStorage } from '../types.js';
 import { STORAGE_KEYS } from './storage.js';
+import { isRecord } from './records.js';
+import { SingleFlight } from './single-flight.js';
 import { evaluateTargeting, type DeviceType, type BehaviorSnapshot } from '../vendor/page-targeting.js';
 
 /**
@@ -52,6 +54,8 @@ export interface SegmentEvaluator {
 export class SegmentGate {
   private readonly evaluate: SegmentEvaluator;
   private readonly cache = new Map<string, { value: boolean; at: number }>();
+  /** Requests under way, by cache key, so a second caller waits for the first instead of asking again. */
+  private readonly flights = new SingleFlight<string, Record<string, boolean>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
   private readonly readIdentity: () => string | undefined;
@@ -86,14 +90,33 @@ export class SegmentGate {
     segmentIds: unknown,
     context?: SegmentContext
   ): Promise<boolean> {
-    const ids = normalizeIds(segmentIds);
-    if (mode !== 'include' && mode !== 'exclude') return true;
-    if (ids.length === 0) return true;
+    const [verdict] = await this.shouldShowMany([{ mode, segmentIds }], context);
+    return verdict !== false;
+  }
 
-    const results = await this.resolve(ids, context);
-    const matched = ids.filter((id) => results[id] === true);
+  /**
+   * The verdict for each of a list of audiences, from ONE evaluation of the
+   * union of the segments they name — a screen with several segment-targeted
+   * surfaces costs one request, not one per surface. The answers come back in
+   * the order of `items`. Each item is judged exactly as `shouldShow` judges it.
+   */
+  async shouldShowMany(
+    items: ReadonlyArray<{ mode: string | undefined; segmentIds: unknown }>,
+    context?: SegmentContext
+  ): Promise<boolean[]> {
+    const judged = items.map((item) => ({
+      mode: item.mode,
+      ids: item.mode === 'include' || item.mode === 'exclude' ? normalizeIds(item.segmentIds) : [],
+    }));
+    const union = new Set<string>();
+    for (const item of judged) for (const id of item.ids) union.add(id);
+    const results = union.size > 0 ? await this.resolve([...union], context) : {};
 
-    return mode === 'include' ? matched.length > 0 : matched.length === 0;
+    return judged.map(({ mode, ids }) => {
+      if (ids.length === 0) return true;
+      const matched = ids.filter((id) => results[id] === true);
+      return mode === 'include' ? matched.length > 0 : matched.length === 0;
+    });
   }
 
   /**
@@ -102,39 +125,76 @@ export class SegmentGate {
    * the answer reflects for the next five minutes. Passing the caller's page
    * rather than reading a field means that first answer is at least about the
    * screen being rendered.
+   *
+   * Everything not cached is asked in ONE request, and a segment that is
+   * already being asked about is waited for, not asked again: two surfaces
+   * resolving on the same screen share the request.
    */
   private async resolve(
     ids: string[],
     context?: SegmentContext
   ): Promise<Record<string, boolean>> {
     const now = this.now();
+    // The identity is read BEFORE the request: an answer belongs to the person
+    // it was asked for, even if somebody signs in while it is in flight.
+    const keyOf = new Map(ids.map((id) => [id, this.key(id)] as const));
     const missing = ids.filter((id) => {
-      const entry = this.cache.get(this.key(id));
+      const entry = this.cache.get(keyOf.get(id) as string);
       return !entry || now - entry.at > this.ttlMs;
     });
 
-    if (missing.length > 0) {
-      let fresh: Record<string, boolean> = {};
-      try {
-        fresh = (await this.evaluate(missing, context)) || {};
-      } catch {
-        // Member of nothing, and not cached — a network blip must not pin a
-        // visitor out of a segment for the whole session.
-        fresh = {};
-        for (const id of missing) fresh[id] = false;
-        return { ...this.fromCache(ids), ...fresh };
-      }
-      for (const id of missing) {
-        this.cache.set(this.key(id), { value: fresh[id] === true, at: now });
-      }
+    const waits = new Set<Promise<Record<string, boolean>>>();
+    const asked: string[] = [];
+    for (const id of missing) {
+      const running = this.flights.pending(keyOf.get(id) as string);
+      if (running) waits.add(running);
+      else asked.push(id);
     }
 
-    return this.fromCache(ids);
+    if (asked.length > 0) {
+      const request = this.ask(asked, keyOf, now, context);
+      this.flights.track(
+        asked.map((id) => keyOf.get(id) as string),
+        request
+      );
+      waits.add(request);
+    }
+
+    const fresh: Record<string, boolean> = {};
+    for (const answer of await Promise.all(waits)) {
+      for (const id of ids) if (id in answer) fresh[id] = answer[id] === true;
+    }
+    return { ...this.fromCache(ids, keyOf), ...fresh };
   }
 
-  private fromCache(ids: string[]): Record<string, boolean> {
+  /** One evaluation of `ids`; never rejects. A failed one answers "member of nothing" and caches nothing. */
+  private async ask(
+    ids: string[],
+    keyOf: Map<string, string>,
+    at: number,
+    context?: SegmentContext
+  ): Promise<Record<string, boolean>> {
+    const answer: Record<string, boolean> = {};
+    let fresh: Record<string, boolean>;
+    try {
+      fresh = (await this.evaluate(ids, context)) || {};
+    } catch {
+      // Member of nothing, and not cached — a network blip must not pin a
+      // visitor out of a segment for the whole session.
+      for (const id of ids) answer[id] = false;
+      return answer;
+    }
+    for (const id of ids) {
+      const value = fresh[id] === true;
+      answer[id] = value;
+      this.cache.set(keyOf.get(id) as string, { value, at });
+    }
+    return answer;
+  }
+
+  private fromCache(ids: string[], keyOf: Map<string, string>): Record<string, boolean> {
     const out: Record<string, boolean> = {};
-    for (const id of ids) out[id] = this.cache.get(this.key(id))?.value === true;
+    for (const id of ids) out[id] = this.cache.get(keyOf.get(id) as string)?.value === true;
     return out;
   }
 }
@@ -277,11 +337,13 @@ export async function audienceAdmits(
 
 /**
  * What this SDK honours on `/experiments/assign` — `holdout` (see
- * `ExperimentAssignment.holdout`) and `audience` (`ExperimentGate.forScreen`).
+ * `ExperimentAssignment.holdout`), `audience` (`ExperimentGate.forScreen`) and
+ * `screen_slot` (a screen experiment's arm at a point of a screen:
+ * `core/screen-slot.ts`, drawn by `SelwiseSlot`).
  * The API keeps a client that does not declare one out of every experiment
  * that needs it.
  */
-export const EXPERIMENT_CLIENT_CAPABILITIES = 'holdout,audience';
+export const EXPERIMENT_CLIENT_CAPABILITIES = 'holdout,audience,screen_slot';
 
 /**
  * The frequency-cap key a held-out surface's would-be displays are counted
@@ -411,6 +473,19 @@ export class ExperimentGate {
   }
 
   /**
+   * The assignment of the experiment on a KIND of target (`search_config`: a
+   * channel has one search, so the experiment has no target id to ask by), or
+   * null. Like `forTarget`, an arm with an audience is only here once
+   * `forScreen` admitted it.
+   */
+  forTargetType(targetType: string): ExperimentAssignment | null {
+    for (const assignment of Object.values(this.assignments)) {
+      if (assignment.targetType === targetType) return assignment;
+    }
+    return null;
+  }
+
+  /**
    * Every arm this visitor was given, audience-gated ones included — each
    * carries its `audience`, and such an arm applies only on a screen it
    * matches.
@@ -444,9 +519,20 @@ export class ExperimentGate {
     return null;
   }
 
+  /**
+   * The screen experiments' arms this gate admits (`targetType: 'screen_slot'`).
+   * An arm with an audience is here only once `forScreen` admitted it.
+   */
+  screenSlotAssignments(): ExperimentAssignment[] {
+    return Object.values(this.assignments).filter((assignment) => assignment.targetType === 'screen_slot');
+  }
+
   /** The substitute entities `different_module` assignments want rendered. */
   variantModules(): Array<{ assignment: ExperimentAssignment; moduleData: unknown }> {
     return Object.values(this.assignments)
+      // A screen arm's module is drawn by its POINT (`screen-slot.ts`), never
+      // appended to the screen's campaigns as a replacement for a control.
+      .filter((assignment) => assignment.targetType !== 'screen_slot')
       .filter((assignment) => assignment.moduleData)
       .map((assignment) => ({ assignment, moduleData: assignment.moduleData }));
   }
@@ -686,10 +772,6 @@ export function deepMerge(
   }
 
   return result;
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export { normalizeIds as normalizeSegmentIds, parseInterval };

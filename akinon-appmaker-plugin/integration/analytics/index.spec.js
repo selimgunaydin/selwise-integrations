@@ -76,6 +76,43 @@ describe('execution', () => {
     expect(selwise.calls[0].args[0]).toBe('KM1');
   });
 
+  // The components read the screen from the SDK client, so a navigation event is
+  // where the client learns the route and the page type "only on product pages" is judged on.
+  it('names the screen to the SDK with its route and its page type', () => {
+    const selwise = fakeSelwise();
+    new SelwiseAnalytics({ selwise }).navigationChange({}, {}, { currentPage: 'ProductDetail' });
+
+    expect(selwise.calls.map((call) => call.name)).toEqual(['trackScreenView']);
+    expect(selwise.calls[0].args).toEqual([
+      'app://product',
+      { screen: 'ProductDetail' },
+      { screenName: 'ProductDetail', pageType: 'product' },
+    ]);
+  });
+
+  it('leaves the page type out for a route it does not label, rather than guessing one', () => {
+    const selwise = fakeSelwise();
+    new SelwiseAnalytics({ selwise }).navigationChange({}, {}, { currentPage: 'CustomScreen' });
+
+    expect(selwise.calls[0].args[2]).toEqual({ screenName: 'CustomScreen', pageType: null });
+  });
+
+  it('reads a route the merchant registered for app://search, under any name, as the search page', () => {
+    const selwise = fakeSelwise();
+    const config = { screenRoutes: { 'app://search': 'ShopSearch' } };
+    new SelwiseAnalytics({ selwise, config }).navigationChange({}, {}, { currentPage: 'ShopSearch' });
+    new SelwiseAnalytics({ selwise, config: {} }).navigationChange({}, {}, { currentPage: 'SelwiseSearch' });
+
+    expect(selwise.calls[0].args).toEqual([
+      'app://search',
+      { screen: 'ShopSearch' },
+      { screenName: 'ShopSearch', pageType: 'search' },
+    ]);
+    // `SelwiseSearch` is a default route name: it needs no config.
+    expect(selwise.calls[1].args[0]).toBe('app://search');
+    expect(selwise.calls[1].args[2]).toEqual({ screenName: 'SelwiseSearch', pageType: 'search' });
+  });
+
   it('sends an order through trackOrder and then drains the queue', () => {
     const selwise = fakeSelwise();
     const analytics = new SelwiseAnalytics({ selwise });
@@ -130,5 +167,53 @@ describe('execution', () => {
     expect(() =>
       analytics.productImpression({ productDetail: { product: { sku: 'KM1' } } }, {}, {})
     ).not.toThrow();
+  });
+});
+
+describe('signed identity (userHashProvider)', () => {
+  const HASH = 'a'.repeat(64);
+  const loginState = { auth: { auth: { user: { pk: 7, email: 'a@b.co' } } } };
+  const login = (analytics) => analytics.userLogin(loginState, {}, {});
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('passes the proof to identify and still identifies before the login event', async () => {
+    const selwise = fakeSelwise();
+    const asked = [];
+    const analytics = new SelwiseAnalytics({
+      selwise,
+      getUserHashProvider: () => async (userId) => {
+        asked.push(userId);
+        return { userHash: HASH, userHashTs: 1792700000 };
+      }
+    });
+    login(analytics);
+    await flush();
+    expect(asked).toEqual(['7']);
+    expect(selwise.calls.map((call) => call.name)).toEqual(['identify', 'track']);
+    expect(selwise.calls[0].args[2]).toEqual({ userHash: HASH, userHashTs: 1792700000 });
+  });
+
+  it('accepts the bare hex string', async () => {
+    const selwise = fakeSelwise();
+    const analytics = new SelwiseAnalytics({ selwise, getUserHashProvider: () => () => HASH });
+    login(analytics);
+    await flush();
+    expect(selwise.calls[0].args[2]).toEqual({ userHash: HASH });
+  });
+
+  it('identifies without a proof when the provider fails, answers badly or is absent', async () => {
+    for (const provider of [
+      () => Promise.reject(new Error('offline')),
+      () => 'not-a-hash',
+      () => null,
+      null
+    ]) {
+      const selwise = fakeSelwise();
+      const analytics = new SelwiseAnalytics({ selwise, getUserHashProvider: () => provider });
+      login(analytics);
+      await flush();
+      expect(selwise.calls.map((call) => call.name)).toEqual(['identify', 'track']);
+      expect(selwise.calls[0].args[2]).toBeUndefined();
+    }
   });
 });
