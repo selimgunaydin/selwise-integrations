@@ -1,4 +1,5 @@
 import type { DynamicCart } from '../vendor/dynamic-content.js';
+import { fnv1a32 } from '../vendor/control-group.js';
 import type {
   RecommendationContext,
   RecommendationExperiment,
@@ -91,6 +92,13 @@ export interface StripOptions {
    * empty answer (an unmeasured basket) leaves it out.
    */
   followCart?: boolean;
+  /**
+   * Where a strip is drawn, as one name: strips that answer the same name compete
+   * for it (`planSlots`) and ONE is drawn. Returns null for a strip that is not
+   * in any point (it competes with nothing). Without the option every strip is
+   * its own place and all are drawn.
+   */
+  scopeOf?: (entry: StripEntry) => string | null;
 }
 
 /** What the service needs from the SDK client — `Selwise` itself. */
@@ -192,6 +200,111 @@ export function filterByPlacement(
   return picked;
 }
 
+/* ----------------------------------------------------------------------------
+   Strips that share a place
+   -------------------------------------------------------------------------- */
+
+/** What a strip says about sharing its place: `triggerConfig.conflictResolution.behavior`. */
+export type StripConflictBehavior = 'highest_priority' | 'random' | 'all';
+
+/** A strip's rank and rule among the strips of its place. */
+export function conflictOf(widget: RecommendationWidgetSummary | null | undefined): {
+  priority: number;
+  behavior: StripConflictBehavior;
+} {
+  const trigger = widget?.['triggerConfig'];
+  const rule =
+    trigger && typeof trigger === 'object' && !Array.isArray(trigger)
+      ? (trigger as Record<string, unknown>)['conflictResolution']
+      : null;
+  const bag = rule && typeof rule === 'object' && !Array.isArray(rule) ? (rule as Record<string, unknown>) : {};
+  const own = Number(widget?.['priority']);
+  const fromRule = Number(bag['priority']);
+  const behavior = bag['behavior'];
+  return {
+    priority: Number.isFinite(own) ? own : Number.isFinite(fromRule) ? fromRule : 0,
+    behavior: behavior === 'random' || behavior === 'all' ? behavior : 'highest_priority',
+  };
+}
+
+/** One strip that is asked for products, and the strips that lost its place, in the order they take over. */
+export interface SlotPlan {
+  entry: StripEntry;
+  fallbacks: StripEntry[];
+}
+
+interface Competitor {
+  id: string;
+  entry: StripEntry;
+  priority: number;
+  behavior: StripConflictBehavior;
+}
+
+
+/**
+ * The strip a place gives to one of several: the rule of the web widget's
+ * recommendation module, applied per place.
+ *
+ *  - any strip with behavior `all`: every strip is drawn;
+ *  - every strip `random`: one, picked by the visitor's seed, so it stays the same
+ *    strip for the whole session and differs between visitors;
+ *  - otherwise the highest priority wins, ties broken by id.
+ */
+function resolveGroup(group: Competitor[], scope: string, seed: string): { selected: Competitor[]; rejected: Competitor[] } {
+  if (group.length <= 1) return { selected: group, rejected: [] };
+  if (group.some((item) => item.behavior === 'all')) return { selected: group, rejected: [] };
+  if (group.every((item) => item.behavior === 'random')) {
+    const ordered = [...group].sort((a, b) => a.id.localeCompare(b.id));
+    const picked = ordered[fnv1a32(`${seed}|${scope}`) % ordered.length] as Competitor;
+    return { selected: [picked], rejected: group.filter((item) => item !== picked) };
+  }
+  const sorted = [...group].sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
+  const winner = sorted[0] as Competitor;
+  return { selected: [winner], rejected: group.filter((item) => item !== winner) };
+}
+
+/**
+ * Which strips of a screen are asked for products, and in which order the others
+ * take over. One place (`scopeOf`) at a time: the rule's winner first, then — the
+ * winner taken out — the rule asked again of the rest, so a fallback comes in
+ * exactly the order the winner did. A strip with no place competes with nothing.
+ *
+ * Output keeps the order the strips were listed in.
+ */
+export function planSlots(
+  entries: readonly StripEntry[],
+  scopeOf: ((entry: StripEntry) => string | null) | undefined,
+  seed = ''
+): SlotPlan[] {
+  const groups = new Map<string, Competitor[]>();
+  const order = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    const id = entry.listed.id;
+    const place = scopeOf ? scopeOf(entry) : null;
+    const scope = place ? `slot:${place}` : `entity:${id}`;
+    const { priority, behavior } = conflictOf(entry.listed);
+    const list = groups.get(scope) ?? [];
+    list.push({ id, entry, priority, behavior });
+    groups.set(scope, list);
+    order.set(id, index);
+  });
+
+  const plans: SlotPlan[] = [];
+  for (const [scope, group] of groups) {
+    const first = resolveGroup(group, scope, seed);
+    const chain: StripEntry[] = [];
+    let rest = first.rejected;
+    while (rest.length > 0) {
+      const next = resolveGroup(rest, scope, seed).selected[0];
+      if (!next) break;
+      chain.push(next.entry);
+      rest = rest.filter((item) => item !== next);
+    }
+    for (const winner of first.selected) plans.push({ entry: winner.entry, fallbacks: chain });
+  }
+  return plans.sort((a, b) => (order.get(a.entry.listed.id) ?? 0) - (order.get(b.entry.listed.id) ?? 0));
+}
+
 /** A request shared while it is in flight and for `SHARED_LOAD_MS` after. */
 class SharedLoads<T> {
   private readonly entries = new Map<string, { at: number; promise: Promise<T> }>();
@@ -218,14 +331,19 @@ export class StripService {
   private placements: Record<string, readonly string[]> = {};
   private readonly lists = new SharedLoads<StripEntry[]>();
   private readonly answers = new SharedLoads<RecommendationProductsResult>();
+  /** The visitor's draw for places whose strips are all `random`: fixed for the life of the client. */
+  private readonly seed: string;
 
   constructor(
     private readonly client: StripClient,
     /** Where a failure is said. A screen renders what it has, so a failure never throws — but it is not silent. */
     private readonly onError: (message: string, error: unknown) => void = () => undefined,
     /** Where a strip left out says why (`Selwise.explain()`): this service writes the arm, cap and emptiness reasons, the client the segment and test-mode ones. */
-    private readonly notShown?: NotShownLedger
-  ) {}
+    private readonly notShown?: NotShownLedger,
+    random: () => number = Math.random
+  ) {
+    this.seed = random().toString(36).slice(2);
+  }
 
   /**
    * Which widgets belong on which screen, by widget name or id, keyed by the
@@ -345,6 +463,20 @@ export class StripService {
    * keyed by it, so a changed basket asks again.
    */
   async strip(entry: StripEntry, context?: unknown, options: StripOptions = {}): Promise<Strip | null> {
+    return (await this.load(entry, context, options, null)).strip;
+  }
+
+  /**
+   * `strip`, saying WHY there is none: a strip with no products (`emptied`) hands
+   * its place to the next of the place's strips, one over its frequency cap does
+   * not. `next` is the strip that takes over, for `explain()`.
+   */
+  private async load(
+    entry: StripEntry,
+    context: unknown,
+    options: StripOptions,
+    next: StripEntry | null
+  ): Promise<{ strip: Strip | null; emptied: boolean }> {
     // A strip over its frequency cap is not drawn, and nothing is asked for it.
     const cap = stripFrequencyCap(entry.widget);
     const blocked = cap ? this.client.recommendationCapBlock(entry.widget.id, cap) : null;
@@ -355,14 +487,18 @@ export class StripService {
         reason: 'frequency_cap',
         detail: { window: blocked },
       });
-      return null;
+      return { strip: null, emptied: false };
     }
     const experiment = {
       ...(entry.experiment ? { experiment: entry.experiment } : {}),
       ...(cap ? { frequencyCap: cap } : {}),
     };
     if (options.followCart && entry.follows) {
-      return { listed: entry.listed, widget: entry.widget, products: [], productCard: null, followsCart: true, ...experiment };
+      this.notShown?.clear('strip', entry.widget.id);
+      return {
+        strip: { listed: entry.listed, widget: entry.widget, products: [], productCard: null, followsCart: true, ...experiment },
+        emptied: false,
+      };
     }
 
     const normalized = normalizeContext(context);
@@ -376,19 +512,31 @@ export class StripService {
     // replaces this one, and drawing both would be two displays — two
     // impressions — of one strip.
     if (options.followCart && result.liveCartRequired === true) {
-      return { listed: entry.listed, widget: answered, products: [], productCard: null, followsCart: true, ...experiment };
+      this.notShown?.clear('strip', entry.widget.id);
+      return {
+        strip: { listed: entry.listed, widget: answered, products: [], productCard: null, followsCart: true, ...experiment },
+        emptied: false,
+      };
     }
     if (result.products.length === 0) {
-      this.notShown?.note('decision', entry.screen ?? '', { id: entry.widget.id, kind: 'strip', reason: 'empty' });
-      return null;
+      this.notShown?.note('decision', entry.screen ?? '', {
+        id: entry.widget.id,
+        kind: 'strip',
+        reason: 'empty',
+        detail: { cause: 'no_products', next: next ? next.listed.id : null },
+      });
+      return { strip: null, emptied: true };
     }
     this.notShown?.clear('strip', entry.widget.id);
     return {
-      listed: entry.listed,
-      widget: answered,
-      products: result.products,
-      productCard: result.productCard || null,
-      ...experiment,
+      strip: {
+        listed: entry.listed,
+        widget: answered,
+        products: result.products,
+        productCard: result.productCard || null,
+        ...experiment,
+      },
+      emptied: false,
     };
   }
 
@@ -396,6 +544,13 @@ export class StripService {
    * Every strip a screen has, with products: the list, then each strip's
    * products. `only` narrows the list BEFORE any products are asked for — a
    * named point asks for the products of its own strips and no other.
+   *
+   * Strips that share a place (`scopeOf`) compete for it by the rule the web
+   * widget applies per container: the highest priority wins, `random` picks one
+   * for the visitor's session, `all` draws every one. A winner that turns out to
+   * have no products hands the place to the next strip in the same order, asked
+   * one at a time. A strip that lost or was passed over is on record in
+   * `explain()` (`conflict`, `empty`).
    */
   async strips(
     pageUrl: string,
@@ -403,8 +558,36 @@ export class StripService {
     options: StripOptions & { only?: (entry: StripEntry) => boolean } = {}
   ): Promise<Strip[]> {
     const entries = (await this.entries(pageUrl)).filter((entry) => (options.only ? options.only(entry) : true));
-    const strips = await Promise.all(entries.map((entry) => this.strip(entry, context, options)));
+    const plans = planSlots(entries, options.scopeOf, this.seed);
+    this.noteConflicts(pageUrl, plans);
+    const strips = await Promise.all(plans.map((plan) => this.firstDrawn(plan, context, options)));
     return strips.filter((strip): strip is Strip => strip !== null);
+  }
+
+  /** The strips that lost a place stay on record as `conflict` until one of them is drawn there. */
+  private noteConflicts(pageUrl: string, plans: readonly SlotPlan[]): void {
+    for (const plan of plans) {
+      const { priority, behavior } = conflictOf(plan.entry.listed);
+      for (const lost of plan.fallbacks) {
+        this.notShown?.note('decision', pageUrl, {
+          id: lost.widget.id,
+          kind: 'strip',
+          reason: 'conflict',
+          detail: { winner: plan.entry.listed.id, rule: behavior, winnerPriority: priority },
+        });
+      }
+    }
+  }
+
+  /** The place's winner, else the first of its fallbacks that has products. */
+  private async firstDrawn(plan: SlotPlan, context: unknown, options: StripOptions): Promise<Strip | null> {
+    const candidates = [plan.entry, ...plan.fallbacks];
+    for (const [at, entry] of candidates.entries()) {
+      const outcome = await this.load(entry, context, options, candidates[at + 1] ?? null);
+      if (outcome.strip) return outcome.strip;
+      if (!outcome.emptied) return null;
+    }
+    return null;
   }
 
   /**

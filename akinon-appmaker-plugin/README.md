@@ -16,11 +16,30 @@ The plugin is pure JavaScript. It adds one dependency and touches neither the
 iOS nor the Android project, so it can go into a merchant's app without a
 native release.
 
-1. Copy this folder to `.plugins/selwise-akinon-appmaker` in the app.
+1. Copy this folder to `.plugins/selwise-akinon-appmaker` in the app. It is
+   published to npm as `selwise-akinon-appmaker` (`npm pack
+   selwise-akinon-appmaker@<version>` and unpack `package/`) and as the
+   `akinon-appmaker-plugin/` folder of
+   [selwise-integrations](https://github.com/selimgunaydin/selwise-integrations).
+   Take the plugin and the SDK of the same release (see Release notes).
 2. Add the SDK: `yarn add @selwise/react-native` (2.0.0 or later: the components
    and the strip service the plugin hands its config to are in it).
-3. Declare it in `akinon.json` under `plugins` (see `config.example.json` for
-   the config block).
+3. Declare it in `akinon.json` under `plugins`. The `config` block's keys are
+   in `config.example.json`; the dashboard's install card prints the whole
+   entry with your channel key:
+
+```json
+"selwise-akinon-appmaker": {
+  "name": "selwise-akinon-appmaker",
+  "moduleName": "SelwiseService",
+  "version": "1.0.1",
+  "config": {
+    "channelKey": "sk_…",
+    "apiKey": "swpk_live_…"
+  }
+}
+```
+
 4. Register it in the generated `dependencies/plugins.js`:
 
 ```js
@@ -104,7 +123,7 @@ app. Nothing is polled and no screen is patched.
 
 ### Consent
 
-When the dashboard's **Cookie Consent → "Ask for consent before tracking"** is on,
+When the dashboard's **Cookie Consent** policy has **Require consent before tracking** and **Hold events until the answer** on and **Apply consent when there is no answer** off,
 Selwise holds every event until the app says what the visitor chose: nothing is
 sent and every figure in the dashboard stays at zero. The plugin cannot ask for
 you — your consent dialog is your own — so it hands the answer over:
@@ -185,8 +204,10 @@ signing out unlinks it.
 screen (`app://basket`), deep link or https address the step points at, with the
 scenario in it so the open is a messaging click. When the push goes through App
 Maker's messaging plugin, point it at that key in `akinon.json` and App Maker
-navigates while this plugin — which already listens to App Maker's deep-link
-service — records the click:
+navigates while this plugin records the click — from the `handleUrlParams`
+event App Maker's deep-link handler publishes for the link, on a cold start as
+well as while the app runs. Both settings are needed: without
+`enableNotificationHandlingOnFCM` App Maker ignores `urlPath`.
 
 ```json
 "akinon-firebase-messaging-service": {
@@ -649,6 +670,20 @@ valuable part of the funnel is unmeasured. `Selwise.webViewBridge()` returns
 the SDK's bridge; inject its script into the WebView and forward the messages.
 
 ## Release notes
+
+### 1.0.1
+
+- **Notification opens are attributed.** A push opened through App Maker's
+  messaging plugin is recorded as a message click, on a cold start too: the
+  plugin listens to the `handleUrlParams` and `notificationOpened` events App
+  Maker publishes. 1.0.0 subscribed to `DeepLinkService`, which never calls a
+  subscriber, so those opens were not recorded.
+- Erasing the account in the app's settings (`anonymizeUser`) detaches the
+  device, as logout does.
+- `CategoryList` and `NotificationPage` routes are mapped (`app://category`,
+  `app://notifications`).
+- `config.example.json` no longer shows `recommendation.active`, which nothing
+  read.
 
 ### 1.0.0
 

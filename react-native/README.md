@@ -520,8 +520,12 @@ too much:
 4. Experiment exclusion — a control the variant replaced does not render
    alongside it.
 5. Segment targeting. Membership is asked of the server and cached for five
-   minutes. An unreachable server means "member of nothing", so `include`
-   hides and `exclude` shows — the same failure directions as the web.
+   minutes. A segment the server cannot answer for — it is switched off or
+   deleted, or the server is unreachable — is unknown, and unknown hides the
+   surface in both modes: `include` needs a segment the visitor is known to be
+   in, and `exclude` needs every listed segment to be a known "not a member".
+   The same rule as the web. (A visitor who has not allowed `personalization`
+   is deliberately in no segment: `exclude` shows, `include` does not.)
 6. Empty content, except for `custom`, where the code IS the content.
 7. Experiment `config_override` — the variant's content merged over the
    control's. Arrays replace rather than concatenate.
@@ -967,7 +971,7 @@ const search = useSelwiseSearch();
 // search.query, setQuery, results (= hits), total, loadMore, hasMore, loading,
 // loadingMore, error, status, isZeroResults, redirect, didYouMean, categories,
 // selectedCategory, setCategory, sort, setSort, suggestions, recent,
-// clearRecent, removeRecent, pickSuggestion, settings, t, open, close,
+// clearRecent, removeRecent, pickSuggestion, submit, settings, t, open, close,
 // trackClick, trackAddToCart, clear
 ```
 
@@ -987,7 +991,12 @@ const search = useSelwiseSearch();
   this client was not started with `testMode`). Neither of the last two is a
   zero-result search: draw nothing, or your own search, not "no results".
 - `redirect` is the address the merchant set for the term (for example
-  "shipping" → the shipping page), or `null`. A redirected term returns no hits,
+  "shipping" → the shipping page), or `null`. It is set only after `submit()`
+  (call it on the keyboard's search key; `pickSuggestion` does it for a tapped
+  term): a term the shopper is still typing never redirects, and a recent
+  search is kept only for a submitted term. `submit()` returns `true` when a
+  rule is already known for the term, so do not also open your own results
+  page. A redirected term returns no hits,
   and is not a zero-result search.
 - Call `open()` when your search screen shows and `close()` when it goes (it is
   closed on unmount too); `trackClick(itemCode, position)` on a tapped result;
@@ -1001,6 +1010,8 @@ const search = useSelwiseSearch();
 const settings = await selwise.getSearchSettings();       // the document, or null
 const sections = await selwise.getSearchSuggestions();    // { recent, popularSearches, popularCategories, popularProducts, order }
 const result = await selwise.search('ceket', { offset: 12, sort: 'price_asc', category: 'Kadın' });
+// The shopper pressed the keyboard's search key: ask as a submission.
+const sent = await selwise.search('kargo', { submit: true });
 // result.hits, total, offset, categories, suggestions (did you mean), redirect, status
 ```
 
@@ -1096,12 +1107,12 @@ selwise.setCart({ total, itemCount, currency });                        // on ev
 | Component | Draws |
 | --- | --- |
 | `<SelwiseSurfaces />` | Every campaign and widget that targets the current screen, drawn where the merchant placed it: a bar docked to the top or bottom, a floating button in one of four corners, a popup or newsletter window (centred, or rising from the bottom), a slide-in from the right, left or bottom, and the merchant's own HTML (`custom`, in the app's WebView). Pictures, buttons, countdowns, the two counters and the newsletter are drawn as designed in the dashboard. The counters read their number from Selwise (`getProductCount`), so there is nothing to pass for them. Props: `renderers`, `onNavigate`. |
-| `<SelwiseSlot screen slot />` | What the merchant sent to that named point: recommendation strips, campaigns placed in a point (an announcement bar inside the product screen, a counter under the price, an inline newsletter) and, with `sku`, the product enrichment placed at the same name. The names are `slotUtils.SCREEN_SLOTS`; a strip with no point is drawn at the screen's last one. A campaign sent to a point you did not mount is not drawn — it never falls back to a bar at the top — and the viewers and basket counters have no place but a point (`pdp-under-info` unless the merchant picked another). |
-| `<RecommendationStrips screen />` | Every strip a screen has, in one place. |
+| `<SelwiseSlot screen slot />` | What the merchant sent to that named point: recommendation strips, campaigns placed in a point (an announcement bar inside the product screen, a counter under the price, an inline newsletter) and, with `sku`, the product enrichment placed at the same name. The names are `slotUtils.SCREEN_SLOTS`; a strip with no point is drawn at the screen's last one. Strips that land on the same point compete as they do on the web: the highest priority is drawn (a tie goes to the id), `random` picks one per install, and if any of them asks for `all` every one is drawn; a winner with no products hands the point to the next. `Selwise.explain()` lists a loser as `conflict` (with the winner and the rule) and an empty winner as `empty`. A campaign sent to a point you did not mount is not drawn — it never falls back to a bar at the top — and the viewers and basket counters have no place but a point (`pdp-under-info` unless the merchant picked another). |
+| `<RecommendationStrips screen />` | Every strip a screen has, in one place — each point's winner, by the same competition as `<SelwiseSlot>`. |
 | `<RecommendationStrip strip />` | One strip you loaded yourself with `selwise.strips`. |
 | `<SelwiseSearchPanel />` | The whole search screen, drawn from the merchant's search settings (see [Search](#search)). |
-| `<SelwiseSearch query />` | A results list: the app keeps its own input and screen. It follows a merchant's redirect rules, pages as it is scrolled and reports the tap. |
-| `<SelwiseEnrichment code slot />` | A named block of the merchant's content for a product. |
+| `<SelwiseSearch query submitted? />` | A results list: the app keeps its own input and screen. With `submitted` it follows a merchant's redirect rules, pages as it is scrolled and reports the tap. |
+| `<SelwiseEnrichment code slot />` | A named block of the merchant's content for a product. On a screen known not to be a product screen its point is not reported as missing. |
 
 `renderItem` on the strips and on search draws your own card;
 `renderers={{ announcement_bar: MyBar }}` on the overlay draws a type with your
@@ -1544,7 +1555,7 @@ everything behind it forever.
 | `trackEnrichmentView(item)` | `void` | One impression per rule. Call when it draws. |
 | `trackEnrichmentClick(item, metadata?)` | `void` | — |
 | `invalidateEnrichment()` | `void` | Drops the cached markup. |
-| `search(query, options?, signal?)` | `Promise<SearchResult>` | Product search: `limit`, `offset`, `sort`, `category`. Check `result.status` and `result.redirect` first. |
+| `search(query, options?, signal?)` | `Promise<SearchResult>` | Product search: `limit`, `offset`, `sort`, `category`, `submit`. Check `result.status` and `result.redirect` first (a redirect comes only with `submit: true`). |
 | `trackSearchOpen(trigger?)`, `trackSearchClose(summary?)` | `void` | The search screen opened and closed. |
 | `trackSuggestionClick(kind, value)` | `void` | A tapped suggestion. |
 | `trackSearchClick(query, itemCode, position?, category?)` | `void` | Required for click-through reporting. |
@@ -1610,6 +1621,29 @@ styles), `triggerUtils`, `countdownUtils`, `slotUtils` and `enrichmentUtils`.
 ---
 
 ## Release notes
+
+### 2.0.1
+
+- **Unknown segment membership hides the surface.** A segment the server
+  cannot answer for (switched off, deleted, unreachable) no longer counts as
+  "not a member": `include` and `exclude` both hide until the answer is known,
+  the same rule as the web.
+- **Search redirects and recent searches follow a submission.** `search()`
+  takes `submit`, `useSelwiseSearch` gains `submit()`, and `<SelwiseSearch>`
+  takes `submitted`: a term the shopper is still typing never redirects, and
+  only a submitted term with results is kept as a recent search.
+- **Interrupting surfaces open one at a time.** A pop-up, slide-in, exit
+  intent and floating button that would open together are settled by campaign
+  priority, the same order as the web.
+- **Recommendation strips.** `<RecommendationStrips>` shows each point's
+  winner by the same competition as `<SelwiseSlot>`; frame, heading, layout and
+  card fixes; the default phone padding is tighter.
+- **Recommendation events carry the visitor's consent snapshot**, and an event
+  the visitor refused is not sent.
+- `<SelwiseEnrichment>` does not report its point as missing on a screen that
+  is known not to be a product screen.
+
+Nothing you call was removed or renamed.
 
 ### 2.0.0
 

@@ -310,6 +310,19 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "name": "submit",
+            "required": false,
+            "in": "query",
+            "description": "`1`: the shopper submitted the term (Enter, a tapped suggestion, \"view all\"); a matching redirect rule answers with `redirect` and no hits, and the rule counts the search. `0`: the shopper is still typing; the answer is the ordinary results, and a matching rule is reported in `redirect` beside them without being counted — draw the hits, do not leave. Absent: as `1`.",
+            "schema": {
+              "enum": [
+                "0",
+                "1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -965,7 +978,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -988,9 +1001,14 @@
         "tags": [
           "public"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
         "x-selwise-tier": "integration",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-dry-run": true,
         "x-selwise-playground": true
       }
@@ -1043,7 +1061,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -1066,9 +1084,14 @@
         "tags": [
           "public"
         ],
-        "security": [],
+        "security": [
+          {
+            "channelApiKey": []
+          }
+        ],
         "x-selwise-tier": "integration",
-        "x-selwise-auth": "verified",
+        "x-selwise-auth": "site",
+        "x-selwise-scope": "mobile_write",
         "x-selwise-dry-run": true,
         "x-selwise-playground": true
       }
@@ -4048,7 +4071,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified, or an app channel without a valid key of the right scope · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -4074,11 +4097,10 @@
         "security": [
           {
             "channelApiKey": []
-          },
-          {}
+          }
         ],
         "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified_app_key",
+        "x-selwise-auth": "site",
         "x-selwise-scope": "mobile_read",
         "x-selwise-playground": false
       }
@@ -4120,7 +4142,7 @@
             }
           },
           "4XX": {
-            "description": "400 invalid input · 403 channel not verified, or an app channel without a valid key of the right scope · 404 unknown channel key · 429 rate limit",
+            "description": "400 invalid input · 402 module not in the contract · 403 channel not verified, origin not allowed, key invalid or out of scope · 404 unknown channel key · 429 rate limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -4146,11 +4168,10 @@
         "security": [
           {
             "channelApiKey": []
-          },
-          {}
+          }
         ],
         "x-selwise-tier": "widget",
-        "x-selwise-auth": "verified_app_key",
+        "x-selwise-auth": "site",
         "x-selwise-scope": "mobile_write",
         "x-selwise-playground": false
       }
@@ -7202,6 +7223,11 @@
           },
           "eventId": {
             "type": "string"
+          },
+          "consentSnapshot": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The visitor's consent as your page holds it: `{ granted: boolean, categories: { marketing: boolean, ... } }`. When it is sent and does not allow the `marketing` category the event is not recorded."
           }
         },
         "required": [
@@ -7254,6 +7280,11 @@
           "eventId": {
             "type": "string",
             "description": "Your id for the event; a repeat is dropped."
+          },
+          "consentSnapshot": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The visitor's consent as your page holds it: `{ granted: boolean, categories: { marketing: boolean, ... } }`. When it is sent and does not allow the `marketing` category the event is not recorded."
           }
         },
         "required": [
@@ -7948,7 +7979,7 @@
           },
           "redirect": {
             "type": "string",
-            "description": "The query matched a redirect rule: send the shopper here. `hits` is empty."
+            "description": "The query matched a redirect rule. On a submission (`submit=1`, or no `submit`) send the shopper here: `hits` is empty. While typing (`submit=0`) `hits` are the ordinary results and this is only where a submission would go — do not leave on it."
           },
           "suggestions": {
             "description": "\"Did you mean\" alternatives on a zero result (at most 5).",
@@ -8083,9 +8114,10 @@
           "results": {
             "type": "object",
             "additionalProperties": {
-              "type": "boolean"
+              "type": "boolean",
+              "nullable": true
             },
-            "description": "Keyed by segment id: is the visitor in it."
+            "description": "Keyed by segment id: `true` (the visitor is in it), `false` (not in it) or `null` (UNKNOWN: the segment is switched off, deleted or could not be evaluated). `null` is not \"not a member\": a campaign that excludes a segment must not be shown on `null`. A client that reads `null` as falsy behaves as it did before `null` existed."
           }
         },
         "required": [
@@ -8456,16 +8488,13 @@
             "items": {
               "type": "string"
             }
-          },
-          "revenue": {
-            "type": "number",
-            "description": "Order value for a conversion"
           }
         },
         "required": [
           "experimentId",
           "variantId",
-          "eventType"
+          "eventType",
+          "visitorId"
         ]
       },
       "TrackPublicEventsBatchDto": {

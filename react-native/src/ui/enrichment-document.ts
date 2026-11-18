@@ -24,6 +24,7 @@
  */
 
 import { brandTokenCss } from '../vendor/theme-css.js';
+import { SLOT_SURFACE_INSET_PX } from '../vendor/surface-geometry.js';
 import { isRecord } from '../core/records.js';
 import { ENRICHMENT_ENTITY_ID_ATTR, ENRICHMENT_ROOT_ATTR } from './enrichment-attrs.js';
 
@@ -65,7 +66,7 @@ export type EnrichmentMessage =
  * The side padding of a slot whose host config and blocks set none: a phone
  * screen has no page margin, so a block's text would sit on the screen edge.
  */
-export const ENRICHMENT_DEFAULT_PADDING = '0 16px';
+export const ENRICHMENT_DEFAULT_PADDING = `0 ${SLOT_SURFACE_INSET_PX}px`;
 
 const PADDING_DECLARATION = /(?:^|[;\s])padding(?:-left|-right|-inline(?:-start|-end)?)?\s*:/i;
 

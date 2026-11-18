@@ -7,6 +7,7 @@ import { screenKey, slotArmEnrichment, slotArmStrip, type ScreenSlotArm } from '
 import { SelwiseEnrichment } from './SelwiseEnrichment.js';
 import { drawStrips, useStripOnScreen, type StripFrameProps } from './RecommendationStrip.js';
 import { useIsFocusedFn } from './host-hooks.js';
+import { SLOT_SURFACE_INSET_PX } from '../vendor/surface-geometry.js';
 import { slotOfWidget, slotsOf } from './slots.js';
 import { boardOf, useBoardDrawn, type SurfaceBoard } from './surface-board.js';
 import { useReportDrawnStrips } from './debug-board.js';
@@ -58,6 +59,11 @@ import { useReportDrawnStrips } from './debug-board.js';
  * - Points on one screen share ONE request for the list of strips, and each
  *   asks for the products of ITS strips only: asked on their own, the widget
  *   list and every strip's products would be fetched once per point.
+ * - Strips sent to ONE point compete for it, as they do in a web container: the
+ *   highest priority is drawn (ties by id), `random` picks one for the visitor's
+ *   session, `all` draws every one, and a winner with no products hands the point
+ *   to the next strip. A strip that lost or was passed over is in
+ *   `Selwise.explain()` as `conflict` or `empty`.
  * - It draws nothing — and fetches nothing — on a product screen until the
  *   product code is known. `similar_products` without its anchor recommends
  *   the product being looked at.
@@ -171,7 +177,9 @@ function SlotItems(props: {
     },
     [board, slot]
   );
-  return h(View, { ref, collapsable: false }, ...items);
+  // The same default side inset an enrichment block has (`SLOT_SURFACE_INSET_PX`): a phone screen has
+  // no page margin, and a counter drawn in a point sat flush against the screen's edge.
+  return h(View, { ref, collapsable: false, style: { paddingHorizontal: SLOT_SURFACE_INSET_PX } }, ...items);
 }
 
 function SlotStrips(props: SelwiseSlotProps & { screen: string }): ReactElement | null {
@@ -197,6 +205,8 @@ function SlotStrips(props: SelwiseSlotProps & { screen: string }): ReactElement 
         followCart: true,
         // Before any products are asked for: a point fetches its own strips and no other.
         only: (entry) => slotOfWidget(entry.listed, screen) === slot,
+        // Strips sent to this point compete for it: one is drawn, as in a web container.
+        scopeOf: (entry) => slotOfWidget(entry.listed, screen),
       })
       .then((result) => {
         if (!cancelled) setStrips(result);

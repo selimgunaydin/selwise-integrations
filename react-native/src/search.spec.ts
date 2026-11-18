@@ -355,6 +355,45 @@ describe('search', () => {
   });
 });
 
+describe('a merchant’s redirect rule and the visitor who is typing', () => {
+  it('says whether the request is a submission, always', async () => {
+    searchBody = { hits: [product('A')], total: 1 };
+    const selwise = await start();
+
+    await selwise.search('ceket');
+    await selwise.search('ceket', { submit: true });
+    await selwise.search('ceket', { offset: 8, submit: true, refinement: true });
+
+    expect(searchRequests().map((url) => url.searchParams.get('submit'))).toEqual(['0', '1', '1']);
+  });
+
+  it('does not hand the host a redirect for a typed term: it keeps the results and knows where a submission would go', async () => {
+    searchBody = { hits: [product('A')], total: 1, redirect: '/kampanyalar' };
+    const selwise = await start();
+
+    const typed = await selwise.search('kampanya kodu');
+
+    expect(typed.redirect).toBeUndefined();
+    expect(typed.submitRedirect).toBe('/kampanyalar');
+    expect(typed.hits).toHaveLength(1);
+    // The typed search is reported as a search, not as a redirect.
+    expect((await eventsOf(selwise, 'search_query'))[0]).toMatchObject({ metadata: { query: 'kampanya kodu', resultsCount: 1 } });
+    expect((await eventsOf(selwise, 'search_query'))[0]?.['metadata']?.redirect).toBeUndefined();
+  });
+
+  it('hands the host the redirect of a submitted term, which has no hits and is no search that found nothing', async () => {
+    searchBody = { hits: [], total: 0, redirect: '/kampanyalar' };
+    const selwise = await start();
+
+    const submitted = await selwise.search('kampanya', { submit: true });
+
+    expect(submitted.redirect).toBe('/kampanyalar');
+    expect(submitted.submitRedirect).toBeUndefined();
+    expect(await eventsOf(selwise, 'search_zero_results')).toHaveLength(0);
+    expect(await selwise.getRecentSearches()).toEqual([]);
+  });
+});
+
 describe('what a search reports', () => {
   it('reports the search once, with the count the report reads', async () => {
     searchBody = { hits: [product('A')], total: 31 };
@@ -380,7 +419,7 @@ describe('what a search reports', () => {
     searchBody = { hits: [], total: 0, redirect: '/kargo' };
     const selwise = await start();
 
-    await selwise.search('kargo');
+    await selwise.search('kargo', { submit: true });
 
     expect(await eventsOf(selwise, 'search_zero_results')).toHaveLength(0);
     expect((await eventsOf(selwise, 'search_query'))[0]).toMatchObject({ metadata: { redirect: '/kargo' } });
@@ -560,8 +599,8 @@ describe('getSearchSuggestions', () => {
     suggestionsBody = POPULAR;
     const selwise = await start();
     searchBody = { hits: [product('A')], total: 1 };
-    await selwise.search('Çanta çekme');
-    await selwise.search('pantolon');
+    await selwise.search('Çanta çekme', { submit: true });
+    await selwise.search('pantolon', { submit: true });
 
     const sections = await selwise.getSearchSuggestions({ query: 'PANT' });
 
@@ -594,9 +633,10 @@ describe('getSearchSuggestions', () => {
 });
 
 describe('recent searches', () => {
+  // A term enters the history when the shopper SUBMITS it, never while they type.
   const searchOnce = async (selwise: Selwise, term: string) => {
     searchBody = { hits: [product('A')], total: 1 };
-    await selwise.search(term);
+    await selwise.search(term, { submit: true });
     await new Promise((resolve) => setTimeout(resolve, 5));
   };
 
@@ -606,10 +646,52 @@ describe('recent searches', () => {
     await searchOnce(selwise, 'mont');
     await searchOnce(selwise, 'CEKET');
     searchBody = { hits: [], total: 0 };
-    await selwise.search('zzzz');
+    await selwise.search('zzzz', { submit: true });
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect((await selwise.getSearchSuggestions()).recent).toEqual(['CEKET', 'mont']);
+  });
+
+  it('keeps nothing a visitor only typed', async () => {
+    searchBody = { hits: [product('A')], total: 1 };
+    const selwise = await start();
+
+    await selwise.search('aya');
+    await selwise.search('ayakk');
+    await selwise.search('ayakkabı');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(await selwise.getRecentSearches()).toEqual([]);
+  });
+
+  it('keeps a term submitted after it was typed, though that second request is a refinement of the first', async () => {
+    searchBody = { hits: [product('A')], total: 1 };
+    const selwise = await start();
+
+    await selwise.search('ceket');
+    await selwise.search('ceket', { submit: true, refinement: true });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(await selwise.getRecentSearches()).toEqual(['ceket']);
+    // Reported once, when it was typed.
+    expect(await eventsOf(selwise, 'search_query')).toHaveLength(1);
+  });
+
+  it('replaces the term it continues: "aya" submitted, then "ayakkabı"', async () => {
+    const selwise = await start();
+    await searchOnce(selwise, 'aya');
+    await searchOnce(selwise, 'ayakkabı');
+
+    expect(await selwise.getRecentSearches()).toEqual(['ayakkabı']);
+  });
+
+  it('does not keep a submitted page past the first', async () => {
+    const selwise = await start();
+    searchBody = { hits: [product('A')], total: 40 };
+    await selwise.search('mont', { submit: true, offset: 8 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(await selwise.getRecentSearches()).toEqual([]);
   });
 
   it('does not keep a page, a category or an order of a search as another search', async () => {

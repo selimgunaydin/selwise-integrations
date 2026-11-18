@@ -51,16 +51,72 @@ describe('SegmentGate', () => {
     await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(false);
   });
 
-  // The failure directions are the whole point: an unreachable evaluator means
-  // "member of nothing", so include hides and exclude shows. Inverting either
-  // one shows a campaign to the wrong audience rather than to none.
-  it('fails closed for include and open for exclude', async () => {
+  // The failure direction is the whole point: an unreachable evaluator is an
+  // UNKNOWN membership, so include hides and exclude hides too. Reading it as
+  // "member of nothing" showed an exclude campaign (hide "Employees") to the
+  // employees whenever the segment request failed.
+  it('fails closed for include AND exclude when the evaluator is unreachable', async () => {
     const gate = new SegmentGate(async () => {
       throw new Error('offline');
     });
 
     await expect(gate.shouldShow('include', ['seg-1'])).resolves.toBe(false);
+    await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(false);
+  });
+
+  it('does not cache a failed answer: the next screen asks again', async () => {
+    const evaluate = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ 'seg-1': false });
+    const gate = new SegmentGate(evaluate);
+
+    await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(false);
     await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(true);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  it('a segment the API answers null for (switched off, deleted) is unknown: exclude and include both hide', async () => {
+    const gate = new SegmentGate(async () => ({ 'seg-1': null }));
+
+    await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(false);
+    await expect(gate.shouldShow('include', ['seg-1'])).resolves.toBe(false);
+  });
+
+  it('an id the answer does not mention is unknown', async () => {
+    const gate = new SegmentGate(async () => ({ 'seg-1': false }));
+
+    await expect(gate.shouldShow('exclude', ['seg-1', 'seg-2'])).resolves.toBe(false);
+  });
+
+  it('exclude shows only when every segment is a known non-membership', async () => {
+    const gate = new SegmentGate(async () => ({ 'seg-1': false, 'seg-2': false }));
+
+    await expect(gate.shouldShow('exclude', ['seg-1', 'seg-2'])).resolves.toBe(true);
+  });
+
+  it('judges each audience of a batch with the same rule, from one request', async () => {
+    const evaluate = jest.fn(async () => ({ a: false, b: null, c: true }));
+    const gate = new SegmentGate(evaluate);
+
+    const verdicts = await gate.shouldShowMany([
+      { mode: 'exclude', segmentIds: ['a'] },
+      { mode: 'exclude', segmentIds: ['b'] },
+      { mode: 'include', segmentIds: ['b', 'c'] },
+      { mode: 'all', segmentIds: [] },
+    ]);
+
+    expect(verdicts).toEqual([true, false, true, true]);
+    expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a visitor without personalization consent is in no segment: exclude shows (the evaluator says false, not unknown)', async () => {
+    // client.ts answers `false` for every id without asking the API when the
+    // visitor has not allowed personalization — a decision, not an unknown.
+    const gate = new SegmentGate(async (ids) => Object.fromEntries(ids.map((id) => [id, false] as const)));
+
+    await expect(gate.shouldShow('exclude', ['seg-1'])).resolves.toBe(true);
+    await expect(gate.shouldShow('include', ['seg-1'])).resolves.toBe(false);
   });
 
   it('asks once per segment inside the cache window', async () => {
@@ -154,8 +210,9 @@ describe('SegmentGate', () => {
     const a = gate.shouldShow('include', ['seg-1']);
     const b = gate.shouldShow('exclude', ['seg-1']);
     release();
+    // Both hide: a failed request is unknown, and unknown is "show" to nobody.
     await expect(a).resolves.toBe(false);
-    await expect(b).resolves.toBe(true);
+    await expect(b).resolves.toBe(false);
     expect(evaluate).toHaveBeenCalledTimes(1);
 
     fail = false;

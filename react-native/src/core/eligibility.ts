@@ -3,6 +3,11 @@ import { STORAGE_KEYS } from './storage.js';
 import { isRecord } from './records.js';
 import { SingleFlight } from './single-flight.js';
 import { evaluateTargeting, type DeviceType, type BehaviorSnapshot } from '../vendor/page-targeting.js';
+import {
+  segmentMembershipOf,
+  segmentTargetingVerdict,
+  type SegmentMembership,
+} from '../vendor/segment-targeting.js';
 
 /**
  * Everything that decides whether a surface may show, beyond page targeting.
@@ -40,22 +45,38 @@ export interface SegmentContext {
 }
 
 export interface SegmentEvaluator {
-  (segmentIds: string[], context?: SegmentContext): Promise<Record<string, boolean>>;
+  /**
+   * Membership by segment id: `true`, `false`, or `null` for one the API could
+   * not answer (a segment that is switched off or deleted). A visitor who has
+   * not allowed personalization is `false` for every id — a decision, not an
+   * unknown (see `SegmentGate`).
+   */
+  (segmentIds: string[], context?: SegmentContext): Promise<Record<string, SegmentMembership>>;
 }
 
 /**
  * Segment membership, cached.
  *
- * Fails CLOSED for `include` and OPEN for `exclude`, because an unreachable
- * evaluator returns "member of nothing" — the same fallback the browser widget
- * uses (`getFallbackResults`). Inverting either one would either hide a
- * merchant's campaign from its whole audience or show a suppressed one.
+ * Three answers, like the browser widget (`SegmentManager`) and by the same
+ * function (`segmentTargetingVerdict`, vendored from the contract): in, not in,
+ * UNKNOWN. An unreachable or failing evaluator, a segment the API answers
+ * `null` for, and an id the answer does not mention are unknown; `include`
+ * needs a known `true`, and `exclude` needs no `true` AND no unknown — a
+ * campaign that hides "Employees" is not shown while the app cannot tell
+ * whether this person is one. It used to read a failed request as "member of
+ * nothing", which is "show" to an `exclude` rule.
+ *
+ * What is NOT unknown: a visitor who has not allowed personalization. The
+ * evaluator answers `false` for every segment without asking the API, on
+ * purpose — nobody's profile was read, so there is nothing to be unsure
+ * about; an `exclude` surface reaches them like anyone else's and an
+ * `include` one does not.
  */
 export class SegmentGate {
   private readonly evaluate: SegmentEvaluator;
-  private readonly cache = new Map<string, { value: boolean; at: number }>();
+  private readonly cache = new Map<string, { value: SegmentMembership; at: number }>();
   /** Requests under way, by cache key, so a second caller waits for the first instead of asking again. */
-  private readonly flights = new SingleFlight<string, Record<string, boolean>>();
+  private readonly flights = new SingleFlight<string, Record<string, SegmentMembership>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
   private readonly readIdentity: () => string | undefined;
@@ -91,7 +112,7 @@ export class SegmentGate {
     context?: SegmentContext
   ): Promise<boolean> {
     const [verdict] = await this.shouldShowMany([{ mode, segmentIds }], context);
-    return verdict !== false;
+    return verdict === true;
   }
 
   /**
@@ -110,13 +131,10 @@ export class SegmentGate {
     }));
     const union = new Set<string>();
     for (const item of judged) for (const id of item.ids) union.add(id);
-    const results = union.size > 0 ? await this.resolve([...union], context) : {};
+    const results: Record<string, SegmentMembership> =
+      union.size > 0 ? await this.resolve([...union], context) : {};
 
-    return judged.map(({ mode, ids }) => {
-      if (ids.length === 0) return true;
-      const matched = ids.filter((id) => results[id] === true);
-      return mode === 'include' ? matched.length > 0 : matched.length === 0;
-    });
+    return judged.map(({ mode, ids }) => segmentTargetingVerdict(mode, ids, results));
   }
 
   /**
@@ -133,7 +151,7 @@ export class SegmentGate {
   private async resolve(
     ids: string[],
     context?: SegmentContext
-  ): Promise<Record<string, boolean>> {
+  ): Promise<Record<string, SegmentMembership>> {
     const now = this.now();
     // The identity is read BEFORE the request: an answer belongs to the person
     // it was asked for, even if somebody signs in while it is in flight.
@@ -143,7 +161,7 @@ export class SegmentGate {
       return !entry || now - entry.at > this.ttlMs;
     });
 
-    const waits = new Set<Promise<Record<string, boolean>>>();
+    const waits = new Set<Promise<Record<string, SegmentMembership>>>();
     const asked: string[] = [];
     for (const id of missing) {
       const running = this.flights.pending(keyOf.get(id) as string);
@@ -160,41 +178,48 @@ export class SegmentGate {
       waits.add(request);
     }
 
-    const fresh: Record<string, boolean> = {};
+    const fresh: Record<string, SegmentMembership> = {};
     for (const answer of await Promise.all(waits)) {
-      for (const id of ids) if (id in answer) fresh[id] = answer[id] === true;
+      for (const id of ids) if (id in answer) fresh[id] = segmentMembershipOf(answer, id);
     }
     return { ...this.fromCache(ids, keyOf), ...fresh };
   }
 
-  /** One evaluation of `ids`; never rejects. A failed one answers "member of nothing" and caches nothing. */
+  /**
+   * One evaluation of `ids`; never rejects. A failed one answers UNKNOWN for
+   * every id and caches nothing.
+   */
   private async ask(
     ids: string[],
     keyOf: Map<string, string>,
     at: number,
     context?: SegmentContext
-  ): Promise<Record<string, boolean>> {
-    const answer: Record<string, boolean> = {};
-    let fresh: Record<string, boolean>;
+  ): Promise<Record<string, SegmentMembership>> {
+    const answer: Record<string, SegmentMembership> = {};
+    let fresh: Record<string, unknown>;
     try {
       fresh = (await this.evaluate(ids, context)) || {};
     } catch {
-      // Member of nothing, and not cached — a network blip must not pin a
-      // visitor out of a segment for the whole session.
-      for (const id of ids) answer[id] = false;
+      // Unknown, and not cached — a network blip must not pin a visitor out of
+      // (or into) a segment for the whole session, and it must not read as "in
+      // no segment" either: that is "show" to an exclude rule.
+      for (const id of ids) answer[id] = null;
       return answer;
     }
     for (const id of ids) {
-      const value = fresh[id] === true;
+      // An id the answer leaves out (or answers with `null`: a segment that is
+      // switched off or deleted) is unknown. The API did answer, so it is
+      // cached like any answer — a switched-off segment stays so for the TTL.
+      const value = segmentMembershipOf(fresh, id);
       answer[id] = value;
       this.cache.set(keyOf.get(id) as string, { value, at });
     }
     return answer;
   }
 
-  private fromCache(ids: string[], keyOf: Map<string, string>): Record<string, boolean> {
-    const out: Record<string, boolean> = {};
-    for (const id of ids) out[id] = this.cache.get(keyOf.get(id) as string)?.value === true;
+  private fromCache(ids: string[], keyOf: Map<string, string>): Record<string, SegmentMembership> {
+    const out: Record<string, SegmentMembership> = {};
+    for (const id of ids) out[id] = this.cache.get(keyOf.get(id) as string)?.value ?? null;
     return out;
   }
 }

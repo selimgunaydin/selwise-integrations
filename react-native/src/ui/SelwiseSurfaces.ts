@@ -27,7 +27,8 @@ import { countdownTarget as contractCountdownTarget } from '../vendor/dynamic-co
 import { countdownUnits, countdownTargetOf } from './countdown.js';
 import { goalBarViews, goalReachedReports } from './goal-bar.js';
 import { useBrandTheme, useNavigate, useSafeAreaInsets } from './host-hooks.js';
-import { isModalSurface, layoutOf, slotBelongsToScreen } from './placement.js';
+import { settleScreenInterrupting } from './interrupting.js';
+import { bottomReserve, isModalSurface, layoutOf, slotBelongsToScreen } from './placement.js';
 import { mergeScenarioSurfaces } from './scenario-surfaces.js';
 import { boardOf, useBoardState } from './surface-board.js';
 import { debugBoardOf, type DrawnSurface } from './debug-board.js';
@@ -299,6 +300,10 @@ export function SelwiseSurfaces(props: SelwiseSurfacesProps): ReactElement | nul
   const loadedScreen = useRef<string | null>(null);
   /** Popups the visitor left through their button or picture, on the screen they are on. */
   const leftScreen = useRef(new Set<string>());
+  /** The one interrupting surface that holds the screen: it stays until it closes (`settleScreenInterrupting`). */
+  const openInterrupting = useRef<string | null>(null);
+  /** The height the bottom dock measured: a floating element in a bottom corner is lifted above it. */
+  const [bottomDockHeight, setBottomDockHeight] = useState(0);
 
   // Navigation, the product, the basket and the language are the things that
   // change which surfaces apply, and what they say.
@@ -375,7 +380,7 @@ export function SelwiseSurfaces(props: SelwiseSurfacesProps): ReactElement | nul
 
   // Each surface the client delivered is drawn, or is left off for ONE reason, named
   // with the dashboard's own code (`explain()` reads them; nothing here decides twice).
-  const visible: Surface[] = [];
+  let visible: Surface[] = [];
   const leftOff: NotShownInput[] = [];
   for (const surface of surfaces) {
     const miss = drawMiss(surface);
@@ -399,6 +404,27 @@ export function SelwiseSurfaces(props: SelwiseSurfacesProps): ReactElement | nul
       }
     );
     return verdict ? { reason: verdict.reason, ...(verdict.detail ? { detail: verdict.detail } : {}) } : null;
+  }
+  // One interrupting surface at a time, as on the web: a popup, a slide-in and a
+  // newsletter in different positions never competed for a dock, and were open
+  // together. The surface that is open stays; the others wait, armed, and are
+  // left off for now with the conflict reason (they open as it closes).
+  const settled = settleScreenInterrupting(visible, openInterrupting.current);
+  // Remembered once the render is committed: a render React discards (strict
+  // mode, an interrupted concurrent render) must not move the turn.
+  const settledOpenId = settled.openId;
+  useEffect(() => {
+    openInterrupting.current = settledOpenId;
+  }, [settledOpenId]);
+  visible = settled.drawn;
+  for (const surface of settled.waiting) {
+    leftOff.push({
+      id: surface.id,
+      kind: 'campaign',
+      type: surface.type,
+      reason: 'conflict',
+      detail: { cause: 'interrupting_open', open: settled.openId },
+    });
   }
   // Said to the client once per change of the list, so a re-render costs nothing.
   const leftOffSignature = leftOff.map((entry) => `${entry.id}:${entry.reason}`).join(',');
@@ -662,11 +688,20 @@ export function SelwiseSurfaces(props: SelwiseSurfacesProps): ReactElement | nul
     bottom.length > 0
       ? h(
           View,
-          { style: [sheet.dock, sheet.bottom, { paddingBottom: insets.bottom }], pointerEvents: 'box-none' },
+          {
+            style: [sheet.dock, sheet.bottom, { paddingBottom: insets.bottom }],
+            pointerEvents: 'box-none',
+            onLayout: (event: { nativeEvent: { layout: { height: number } } }) => {
+              const height = Math.round(event.nativeEvent.layout.height);
+              setBottomDockHeight((previous) => (previous === height ? previous : height));
+            },
+          },
           bottom.map((s) => renderSurface(s))
         )
       : null,
-    floating.map((surface) => renderSurface(surface, { insets })),
+    floating.map((surface) =>
+      renderSurface(surface, { insets: { top: insets.top, bottom: bottomReserve(insets.bottom, bottomDockHeight, bottom.length > 0) } })
+    ),
     modals.map((s) => renderSurface(s)),
     // Mounted whatever the list holds (nothing to draw is still a screen worth
     // explaining); it renders nothing unless the host asked for `debug: true`.

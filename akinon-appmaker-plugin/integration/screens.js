@@ -21,6 +21,8 @@ const SCREENS = [
   { route: 'ProductDetail', url: 'app://product', pageType: 'product' },
   { route: 'ProductList', url: 'app://list', pageType: 'category' },
   { route: 'Category', url: 'app://category', pageType: 'category' },
+  // The category menu under another name in some App Maker projects.
+  { route: 'CategoryList', url: 'app://category', pageType: 'category' },
   { route: 'CollectionList', url: 'app://collections', pageType: 'category' },
   { route: 'CollectionDetail', url: 'app://collection', pageType: 'category' },
   { route: 'Search', url: 'app://search', pageType: 'search' },
@@ -44,6 +46,7 @@ const SCREENS = [
   { route: 'SignIn', url: 'app://auth/login', pageType: 'account' },
   { route: 'SignUp', url: 'app://auth/register', pageType: 'account' },
   { route: 'Notifications', url: 'app://notifications', pageType: 'other' },
+  { route: 'NotificationPage', url: 'app://notifications', pageType: 'other' },
   { route: 'Contact', url: 'app://contact', pageType: 'other' }
 ];
 

@@ -42,7 +42,11 @@ function installFetch() {
     else if (/\/search\?/.test(href)) {
       const params = new URL(href).searchParams;
       const key = `${params.get('q') ?? ''}|${params.get('offset') ?? '0'}`;
-      payload = searchAnswers[key] ?? searchAnswers[params.get('q') ?? ''] ?? { hits: [], total: 0 };
+      const answer = searchAnswers[key] ?? searchAnswers[params.get('q') ?? ''] ?? { hits: [], total: 0 };
+      // The API's own rule: a rule answers a SUBMISSION (`submit=1`); a typed term gets
+      // the results — the answer's `typing` — with the rule's address beside them.
+      const { typing, ...rest } = answer as Record<string, unknown> & { typing?: Record<string, unknown> };
+      payload = typing && params.get('submit') !== '1' ? { ...typing, redirect: rest.redirect } : rest;
     } else if (href.includes('/config')) payload = { theme: { '--selwise-brand': '#d3145a' } };
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) } as unknown as Response;
   });
@@ -125,6 +129,13 @@ const press = async (node: ReactTestInstance | undefined) => {
 const type = async (renderer: ReactTestRenderer, text: string) => {
   await act(async () => {
     (renderer.root.findByType(el('TextInput')).props as { onChangeText: (text: string) => void }).onChangeText(text);
+  });
+  await settle();
+};
+/** The keyboard's search key. */
+const submit = async (renderer: ReactTestRenderer) => {
+  await act(async () => {
+    (renderer.root.findByType(el('TextInput')).props as { onSubmitEditing: () => void }).onSubmitEditing();
   });
   await settle();
 };
@@ -356,6 +367,11 @@ describe('SelwiseSearchPanel: the empty box', () => {
       searchAnswers = { ceket: { hits: [product('A')], total: 1 } };
       const { renderer } = await panel();
       await type(renderer, 'ceket');
+      // Typing alone keeps nothing; the keyboard's search key does.
+      await type(renderer, '');
+      expect(texts(renderer)).not.toContain('Son aramalar');
+      await type(renderer, 'ceket');
+      await submit(renderer);
       await type(renderer, '');
 
       expect(texts(renderer)).toEqual(expect.arrayContaining(['Son aramalar', 'ceket']));
@@ -371,7 +387,9 @@ describe('SelwiseSearchPanel: the empty box', () => {
       };
       const { renderer, client } = await panel();
       await type(renderer, 'ceket');
+      await submit(renderer);
       await type(renderer, 'mont');
+      await submit(renderer);
       await type(renderer, '');
 
       await press(buttonLabelled(renderer, 'Sil: ceket'));
@@ -1079,13 +1097,29 @@ describe('SelwiseSearchPanel: the app’s own box, the other states and the app�
     expect(states).toEqual(['off']);
   });
 
-  it('follows a merchant’s redirect instead of drawing "no results"', async () => {
-    searchAnswers = { kargo: { hits: [], total: 0, redirect: '/kargo-bilgileri' } };
+  it('follows a merchant’s redirect once the term is submitted, instead of drawing "no results"', async () => {
+    searchAnswers = { kargo: { hits: [], total: 0, redirect: '/kargo-bilgileri', typing: { hits: [product('K')], total: 1 } } };
     const { renderer, navigated } = await panel();
     await type(renderer, 'kargo');
 
+    // Typing is not asking: the results are drawn and nobody is sent anywhere.
+    expect(navigated).toEqual([]);
+    expect(renderer.toJSON()).not.toBeNull();
+
+    await submit(renderer);
+
     expect(navigated).toEqual([{ kind: 'path', url: '/kargo-bilgileri', source: 'search' }]);
     expect(renderer.toJSON()).toBeNull();
+  });
+
+  it('puts a known redirect ahead of "view all" on the keyboard’s search key', async () => {
+    configure({ results: { viewAll: { enabled: true, url: '/ara?q={query}', param: 'q', newTab: false } } });
+    searchAnswers = { kargo: { hits: [], total: 0, redirect: '/kargo-bilgileri', typing: { hits: [product('K')], total: 1 } } };
+    const { renderer, navigated } = await panel();
+    await type(renderer, 'kargo');
+    await submit(renderer);
+
+    expect(navigated).toEqual([{ kind: 'path', url: '/kargo-bilgileri', source: 'search' }]);
   });
 
   it('lets the app draw a result, and hands it what it needs', async () => {
@@ -1257,9 +1291,10 @@ describe('SelwiseSearchPanel: as a screen of its own', () => {
   });
 
   it('draws the back arrow while a redirect leaves, and still nothing without onBack', async () => {
-    searchAnswers = { kargo: { hits: [], total: 0, redirect: '/kargo-bilgileri' } };
+    searchAnswers = { kargo: { hits: [], total: 0, redirect: '/kargo-bilgileri', typing: { hits: [product('K')], total: 1 } } };
     const { renderer } = await panel({ onBack: () => undefined });
     await type(renderer, 'kargo');
+    await submit(renderer);
 
     expect(renderer.root.findAllByType(el('TextInput'))).toHaveLength(0);
     expect(renderer.root.findAllByType(el('Pressable'))).toHaveLength(1);
@@ -1282,6 +1317,42 @@ describe('useSelwiseSearch', () => {
     await act(async () => latest.setQuery(query));
     await settle();
   };
+
+  it('hands the app a redirect only after submit(), and says whether one is already known', async () => {
+    configure({ behavior: { minChars: 2, debounceMs: 0, maxResults: 8 } });
+    searchAnswers = { kampanya: { hits: [], total: 0, redirect: '/kampanyalar', typing: { hits: [product('A')], total: 1 } } };
+    await probe();
+
+    await set('kampanya');
+    expect(latest.redirect).toBeNull();
+    expect(latest.results).toHaveLength(1);
+    expect(searchRequests().map((url) => url.searchParams.get('submit'))).toEqual(['0']);
+
+    let redirecting = false;
+    await act(async () => {
+      redirecting = latest.submit();
+    });
+    await settle();
+
+    expect(redirecting).toBe(true);
+    expect(latest.redirect).toBe('/kampanyalar');
+    expect(searchRequests().map((url) => url.searchParams.get('submit'))).toEqual(['0', '1']);
+  });
+
+  it('ignores submit() for a term shorter than the channel searches from, and never turns a later typed search into a submission', async () => {
+    configure({ behavior: { minChars: 3, debounceMs: 0, maxResults: 8 } });
+    searchAnswers = { ceket: { hits: [product('A')], total: 1 } };
+    await probe();
+
+    await set('ce');
+    await act(async () => {
+      latest.submit();
+    });
+    await settle();
+    await set('ceket');
+
+    expect(searchRequests().map((url) => url.searchParams.get('submit'))).toEqual(['0']);
+  });
 
   it('takes its debounce, minimum length and page size from the channel’s settings', async () => {
     configure({ behavior: { minChars: 4, debounceMs: 0, maxResults: 3 } });

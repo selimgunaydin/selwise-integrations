@@ -20,8 +20,9 @@ import type {
  *
  *   guarded   → /config, /recommendations, /recommendations/:id/products,
  *               /search, /search-config, /search/suggestions, /orders,
- *               /experiments/assign, /experiments/track
- *   ungated   → /events/batch, /presence, /recommendations/track/*
+ *               /experiments/assign, /experiments/track,
+ *               /recommendations/track/* (an app channel's write carries its key)
+ *   ungated   → /events/batch, /presence
  *
  * An app never calls `/search/log`, `/search/click` or `/search/zero-results`:
  * the API writes the same rows from the app's `search_query`, `product_click`
@@ -222,6 +223,10 @@ export class Endpoints {
         category: options.category,
         offset: options.offset,
         sort: options.sort,
+        // `1` only for a submitted term: the one request a merchant's redirect
+        // rule answers (and counts). A typed one gets the results, with the
+        // rule's address beside them; a page or a refinement is not a submission.
+        submit: options.submit === true ? '1' : '0',
         // An app is always a phone: the search answers with its phone settings.
         device: 'mobile',
       },
@@ -383,7 +388,9 @@ export class Endpoints {
   }
 
   /**
-   * Segment membership for this visitor.
+   * Segment membership for this visitor: `true`, `false`, or `null` when the
+   * segment is switched off, deleted or could not be evaluated (unknown — an
+   * older API answers `false` for those).
    *
    * Site-key scoped by QUERY, not by path: it is a cross-site public route
    * (`/public/segments/evaluate?siteKey=…`), unlike everything else here.
@@ -405,7 +412,7 @@ export class Endpoints {
       screenDaysAgo?: Record<string, number>;
     },
     signal?: AbortSignal
-  ): Promise<{ results?: Record<string, boolean> }> {
+  ): Promise<{ results?: Record<string, boolean | null> }> {
     return this.http.request({
       path: '/segments/evaluate',
       method: 'POST',
@@ -523,7 +530,6 @@ export class Endpoints {
       path: '/recommendations/track/event',
       method: 'POST',
       body,
-      unauthenticated: true,
       signal,
     });
   }

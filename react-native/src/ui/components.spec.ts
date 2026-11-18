@@ -463,7 +463,15 @@ describe('SelwiseSlot', () => {
     listed = [
       { id: 'top-1', name: 'Üst', title: 'Üstteki şerit', containerSelector: '[data-selwise-slot="home-top"]' },
       { id: 'bottom-1', name: 'Alt', title: 'Alttaki şerit', containerSelector: '[data-selwise-slot="home-bottom"]' },
-      { id: 'plain-1', name: 'Seçicisiz', title: 'Varsayılan şerit', containerSelector: '' },
+      // Shares `home-bottom` with `bottom-1` and asks to be drawn beside it
+      // (`all`): strips at one point compete as on the web (core/strips).
+      {
+        id: 'plain-1',
+        name: 'Seçicisiz',
+        title: 'Varsayılan şerit',
+        containerSelector: '',
+        triggerConfig: { conflictResolution: { behavior: 'all' } },
+      },
     ];
     answers = {
       'top-1': { products: [product('T1')] },
@@ -569,6 +577,20 @@ describe('SelwiseSlot', () => {
     reported.mockRestore();
   });
 
+  it('lets the strips of one point compete: the higher priority is drawn alone', async () => {
+    listed = [
+      { id: 'bottom-1', name: 'Alt', title: 'Alttaki şerit', containerSelector: '[data-selwise-slot="home-bottom"]', priority: 1 },
+      { id: 'plain-1', name: 'Seçicisiz', title: 'Varsayılan şerit', containerSelector: '', priority: 5 },
+    ];
+    const client = await startClient();
+    const { host } = recordingHost();
+    const renderer = await mount(client, host, h(SelwiseSlot, { screen: 'app://home', slot: 'home-bottom' }));
+    await settle();
+
+    expect(texts(renderer)).toContain('Varsayılan şerit');
+    expect(texts(renderer)).not.toContain('Alttaki şerit');
+  });
+
   it('is the one place RecommendationStrips draws everything a screen has', async () => {
     const client = await startClient();
     await goTo(client, 'app://home');
@@ -640,15 +662,25 @@ describe('SelwiseSearch', () => {
   });
 
   // A redirect is an ANSWER: "kargo" goes to the shipping page and shows no list.
-  it('follows a merchant redirect instead of drawing "no results"', async () => {
+  it('follows a merchant redirect for a submitted term instead of drawing "no results"', async () => {
     searchAnswer = { hits: [], redirect: '  /kargo-bilgileri ' };
     const client = await startClient();
     const { host, navigated } = recordingHost();
-    const renderer = await mount(client, host, h(SelwiseSearch, { query: 'kargo', debounceMs: 0 }));
+    const renderer = await mount(client, host, h(SelwiseSearch, { query: 'kargo', submitted: true, debounceMs: 0 }));
     await settleSearch();
 
     expect(navigated).toEqual([{ kind: 'path', url: '/kargo-bilgileri', source: 'search' }]);
     expect(renderer.toJSON()).toBeNull();
+  });
+
+  it('never follows a redirect for a term the shopper is still typing', async () => {
+    searchAnswer = { hits: [], redirect: '/kargo-bilgileri' };
+    const client = await startClient();
+    const { host, navigated } = recordingHost();
+    await mount(client, host, h(SelwiseSearch, { query: 'kargo', debounceMs: 0 }));
+    await settleSearch();
+
+    expect(navigated).toEqual([]);
   });
 
   it('says there is nothing for a query that matched nothing', async () => {

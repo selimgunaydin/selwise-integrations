@@ -1023,11 +1023,18 @@ function requireBasketActions() {
  * Every way a link reaches the app, one callback.
  *
  * React Native's `Linking` is the floor: `getInitialURL` for the link that
- * started the app, the `url` event for one that arrives while it runs. App
- * Maker's `DeepLinkService` also publishes notification opens, so it is
- * subscribed too when it offers `subscribe`. One open may arrive through both;
- * the SDK records a link once per session, so that is one landing.
- * Returns the unsubscribe.
+ * started the app, the `url` event for one that arrives while it runs.
+ *
+ * A notification opened through App Maker's messaging plugin never reaches
+ * `Linking`: App Maker hands its `urlPath` value to its own deep-link handler.
+ * That handler publishes `handleUrlParams` on the `AnalyticsService` for every
+ * link that carries a query — on a cold start and while the app runs — with
+ * the parsed link (`{ baseUrl, url, query }`); a Selwise message link always
+ * carries one (`sw_sc`). `notificationOpened` (the raw payload, only while the
+ * app runs) is read too. `DeepLinkService.subscribe` is NOT a way in: App Maker
+ * only calls the `init` / `remove` methods of what is registered there, never
+ * a handler. One open may arrive through two of these; the SDK records a link
+ * once per session, so that is one landing. Returns the unsubscribe.
  */
 function subscribeDeepLinks(onUrl) {
   const stops = [];
@@ -1040,6 +1047,7 @@ function subscribeDeepLinks(onUrl) {
     const url = pick(value).trim();
     if (url) onUrl(url);
   };
+  let listening = true;
 
   try {
     // eslint-disable-next-line global-require
@@ -1055,16 +1063,26 @@ function subscribeDeepLinks(onUrl) {
     log('Linking unavailable — links that open the app are not attributed');
   }
 
-  const deepLink = requireDeeplinkService();
-  if (deepLink && typeof deepLink.subscribe === 'function') {
+  const AnalyticsService = requireAnalyticsService();
+  if (AnalyticsService && typeof AnalyticsService.subscribe === 'function') {
     try {
-      // The documented shape names the subscriber like AnalyticsService does;
-      // a one-argument subscribe takes the handler alone.
-      const handle = deepLink.subscribe.length >= 2 ? deepLink.subscribe(PLUGIN_KEY, deliver) : deepLink.subscribe(deliver);
-      if (typeof handle === 'function') stops.push(handle);
+      // App Maker has no unsubscribe: the subscriber stays and goes quiet.
+      AnalyticsService.subscribe(PLUGIN_KEY + '-links', {
+        handleUrlParams(nextState, prevState, parsed) {
+          if (listening) deliver(linkOfParsedUrl(parsed));
+        },
+        notificationOpened(nextState, prevState, payload) {
+          if (listening) deliver(payload);
+        },
+      });
+      stops.push(() => {
+        listening = false;
+      });
     } catch (error) {
-      log('DeepLinkService.subscribe failed: ' + ((error && error.message) || error));
+      log('AnalyticsService.subscribe failed: ' + ((error && error.message) || error));
     }
+  } else {
+    log('AnalyticsService unavailable — notification opens are not attributed');
   }
 
   return () => {
@@ -1086,6 +1104,29 @@ function requireDeeplinkService() {
   } catch (error) {
     return null;
   }
+}
+
+/**
+ * The link App Maker's deep-link handler parsed (`{ baseUrl, url, query }`),
+ * put back together: what the SDK reads attribution from is the query.
+ */
+function linkOfParsedUrl(parsed) {
+  if (!parsed || typeof parsed !== 'object') return '';
+  const path = typeof parsed.url === 'string' ? parsed.url : '';
+  const base = typeof parsed.baseUrl === 'string' ? parsed.baseUrl : '';
+  const query = parsed.query && typeof parsed.query === 'object' ? parsed.query : {};
+  const pairs = [];
+  for (const key of Object.keys(query)) {
+    const values = Array.isArray(query[key]) ? query[key] : [query[key]];
+    for (const value of values) {
+      if (value === undefined) continue;
+      pairs.push(
+        encodeURIComponent(key) + (value === null ? '' : '=' + encodeURIComponent(String(value)))
+      );
+    }
+  }
+  if (!path && !base) return '';
+  return base + path + (pairs.length ? '?' + pairs.join('&') : '');
 }
 
 /** The merchant's own origin, from the app's url map. */

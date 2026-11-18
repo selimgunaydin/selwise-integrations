@@ -42,13 +42,20 @@ export class RecentSearches {
     return this.terms.slice(0, Math.max(0, max));
   }
 
-  /** Puts `term` first, once: the same term in another case moves up instead of repeating. */
+  /**
+   * Puts `term` first, once: the same term in another case moves up instead of
+   * repeating. When the newest entry is the start of `term` ("aya", then
+   * "ayakkabı") `term` takes its place: one search typed in two goes is one
+   * entry.
+   */
   async add(term: string): Promise<void> {
     const text = String(term ?? '').trim().slice(0, TERM_MAX_LENGTH);
     if (!text) return;
     await this.load();
     const key = fold(text);
-    this.terms = [text, ...this.terms.filter((entry) => fold(entry) !== key)].slice(0, RECENT_SEARCH_LIMIT);
+    const newest = this.terms[0] === undefined ? undefined : fold(this.terms[0]);
+    const kept = newest !== undefined && newest !== key && key.startsWith(newest) ? this.terms.slice(1) : this.terms;
+    this.terms = [text, ...kept.filter((entry) => fold(entry) !== key)].slice(0, RECENT_SEARCH_LIMIT);
     await this.save();
   }
 

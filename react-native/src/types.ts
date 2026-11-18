@@ -394,6 +394,17 @@ export interface SearchOptions {
    * without saying so.
    */
   refinement?: boolean;
+  /**
+   * The shopper SUBMITTED this term (the keyboard's search key, a tapped
+   * suggestion) rather than typed it. Default `false`: a search is typing.
+   *
+   * Only a submission follows a merchant's redirect rule (`result.redirect`,
+   * which is absent from a typed answer) and enters the recent searches. Typing
+   * does neither: a rule on "kampanya" must not take the shopper away from
+   * "kampanya kodu nasıl kullanılır" at its first word, and the history must not
+   * keep every pause on the way to a word.
+   */
+  submit?: boolean;
 }
 
 /** One category of a result list, with how many of the results it holds. */
@@ -425,8 +436,17 @@ export interface SearchResult {
    * When set, it REPLACES the result list — the browser widget navigates and
    * renders nothing. An app that renders `hits` anyway shows an empty list for
    * a rule the merchant configured on purpose, so check this first.
+   *
+   * Only an answer to a SUBMITTED search (`options.submit`) carries it; the hits
+   * of a typed one are the ordinary results.
    */
   redirect?: string;
+  /**
+   * Where a submission of this typed term would go (a rule matched it): the
+   * results are the ordinary ones and are drawn. A host that offers its own
+   * "view all" on the keyboard's search key checks it first.
+   */
+  submitRedirect?: string;
   /**
    * Why the list may be empty for a reason that is not "nothing matched":
    * `off` — search is switched off for this channel, or this visitor is outside

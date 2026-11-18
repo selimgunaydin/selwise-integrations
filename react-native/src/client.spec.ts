@@ -1338,7 +1338,7 @@ describe('search redirects', () => {
     });
     const selwise = await init();
 
-    const result = await selwise.search('kargo');
+    const result = await selwise.search('kargo', { submit: true });
     expect(result.redirect).toBe('/kargo-bilgileri');
 
     await selwise.flush();

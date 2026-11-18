@@ -25,11 +25,11 @@ Ortak parçalar: [`shared/`](./shared)
 
 ```
 shared/
-  selwise-ee-shim.js      Enhanced Ecommerce olaylarını GA4 adlarına yansıtır ← çoğu projede gerekmez (ön ayar ikisini de okur)
+  selwise-ee-shim.js      Enhanced Ecommerce olaylarını GA4 adlarına yansıtır ← gerekmez (ön ayar ikisini de okur); yalnız istisna
   selwise-basket-hook.js  Selwise sepete ekledikten sonra eski temada mini sepet ← yalnız eski Django temaları
   selwise-cart-bridge-core.js  PZ Next köprüsünün bağımlılıksız çekirdeği (SelwiseCartBridge.tsx kullanır)
   selwise-loader.js       Çoklu pazar: hostname → siteKey                     ← tek pazarda gerekmez
-  page-patterns.json      Panele girilecek düzeltilmiş sayfa desenleri        ← her projede gerekli
+  page-patterns.json      Sayfa desenleri (Akinon ön ayarındakilerle aynı)    ← yalnız ezmek isterseniz
 pz-classic/
   selwise.html            base.html'e include edilecek template
   selwise-order.html      Teşekkür sayfası sipariş takibi
@@ -80,14 +80,27 @@ veri yerine markup döndürmesinin tek sebebi bu. Üstünden ikinci bir
 sanitizer geçirmeyin: genel amaçlı bir sanitizer `data-selwise-*` niteliklerini
 siler, widget bloğu tanıyamaz ve içerik iki kez basılır.
 
-Müşteriye dönük tam anlatım: `content/docs/product-enrichment/server-side.mdx`
-ve `content/docs/api-reference/ssr-api.mdx`.
+Tam anlatım: `selwise.com/docs/product-enrichment/server-side` ve
+`selwise.com/docs/api-reference/ssr-api`.
 
 ---
 
 ## Sürüm notları
 
-**Yayımlanmamış (bu kopyadan sonraki ilk sürüm)** — kopyalarınızı güncelleyin:
+**18 Kasım 2026** — kopyalarınızı güncelleyin:
+
+- `pz-classic/selwise.html`: varsayılan kurulum artık shim'siz; Selwise
+  mağazanın kendi `dataLayer`'ını Akinon ön ayarıyla okur (panelde
+  **External Data Layer Name** `dataLayer`). Kullanılmayan `window.selwiseProduct`
+  bloğu kaldırıldı. Başlıkta CSP notu var.
+- `shared/selwise-ee-shim.js`: olay adı taşımayan itmeleri (`{ cd_userId, … }`)
+  ve rıza komutlarını (`['consent', …]`) da aynalar; önceki sürüm shim'li bir
+  kurulumda üye kimliğini ve çerez bandının kararını düşürüyordu.
+- `pz-next/SelwiseScript.tsx`: `async` bileşen, `await headers()` (Next.js 15/16,
+  `@akinon/next` 2.x şartı; eski sürüm 2.x'te çalışmıyordu), host önce
+  `x-forwarded-host`'tan okunur.
+
+**Önceki sürüm:**
 
 - `pz-classic/selwise.html`: yedek kimlik, Django şablon bağlamındaki `user`
   değişkenini okur (`current_user` bağlamda yoktur; önceki sürüm hiç çalışmıyordu).
@@ -100,75 +113,75 @@ ve `content/docs/api-reference/ssr-api.mdx`.
 
 ---
 
-## Neden `dataLayer` değil `selwiseLayer`
-
-Kitin en önemli kararı bu, o yüzden baştan net olsun.
+## Veri katmanı: mağazanın kendi `dataLayer`'ı
 
 Django PZ'nin kutudan gelen GTM adaptörü ürün **detay**, **tıklama** ve
-**impression** olaylarının üçünü de tek bir `eeEvent` adıyla basıyor
-(`shop-packages/analytics/action-params.js`). Selwise gelen olayları **ada göre**
-eşliyor — `eeEvent` tek başına hangisinin kastedildiğini söyleyemez, eşlemek
-tıklamaları görüntüleme olarak kaydeder.
+**impression** olaylarının üçünü de tek bir `eeEvent` adıyla basıyor; anlam
+`ecommerce` içindeki eylem anahtarında. Selwise'ın **Akinon ön ayarı** bunu
+bilir (`eeEvent` + `detail` → ürün görüntüleme, `eeEvent` + `click` → tıklama
+…) ve GA4 adlarını da okur; her olay için sayfada ilk görülen lehçe kazanır,
+çift sayım olmaz. Bu yüzden varsayılan kurulumda **çeviri katmanı yoktur**:
+panelde **External Data Layer Name** `dataLayer` kalır.
 
-Adın taşımadığı ayrım `ecommerce` payload'ında var: **action anahtarı niyetin
-kendisi.** `selwise-ee-shim.js` o anahtarı okuyup olayı doğru GA4 adıyla
-**özel bir katmana** aynalıyor.
-
-Özel katman olması şart: yeniden adlandırılmış olayları `window.dataLayer`'a
-geri yazmak müşterinin kendi GTM container'ını da besler ve her GA4 hit'ini
-çift sayar. Shim `dataLayer`'a **hiçbir şey yazmaz**.
-
-GA4 şeklindeki olaylar **değiştirilmeden** aynalanır, yani özel katman sitenin
-yayımladığı her şeyin tam üst kümesi. Kendi GA4 katmanını yazmış projeler
-(birkaç canlı Akinon vitrini) için özel bir durum yok — shim'i her
-yere kurun.
-
-Panelde karşılığı: **Integrations → Data Layer → Source variable name =
-`selwiseLayer`**. Bu ayar yapılmazsa Selwise `dataLayer`'ı dinlemeye devam eder
-ve shim etkisiz kalır.
+`selwise-ee-shim.js` yalnız ön ayarı kullanamayan bir tema içindir (ör. olay
+adları standart dışı): `eeEvent`'i GA4 adlarıyla **özel bir katmana**
+(`selwiseLayer`) aynalar, mağazanın `dataLayer`'ına hiçbir şey yazmaz. O
+durumda panelde **External Data Layer Name** `selwiseLayer` olur; kurulum
+`pz-classic/selwise.html` başlığında.
 
 ---
 
 ## Kurulum: Project Zero (Django)
 
-**1. Panel — Sites → Installation**
-Site oluştur, domain'i doğrula (`isVerified`). Doğrulanmadan hiçbir widget
-render edilmez ve olaylar reddedilir.
+**0. Ön kontrol — CSP.** Proje `django-csp` kullanıyorsa
+(`omnife_base/settings.py` içinde `CSPMiddleware`), `CSP_SCRIPT_SRC` ve
+`CSP_STYLE_SRC` listelerine `https://widget.selwise.com`, `CSP_CONNECT_SRC`
+listesine `https://api.selwise.com` ekleyin. Eklenmezse etiket GTM'den de
+gelse hiçbir şey yüklenmez ve hata yalnız tarayıcı konsolunda görünür.
 
-**2. Panel — Integrations → Data Layer**
+**1. Panel — kanal.** Web kanalını oluşturun; **Kanal ayarları**'nda e-ticaret
+platformu **Akinon** olsun. Kanal anahtarı ve kurulum kodu kanalın kurulum
+kartındadır. Alan adı doğrulanmadan hiçbir yüzey çizilmez ve olaylar reddedilir.
+
+**2. Panel — Integrations → Data Layer Configuration**
 
 | Alan | Değer |
 |---|---|
-| Platform | `akinon` |
-| Source variable name | `selwiseLayer` |
-| Page detection | `patterns` |
-| Page patterns | [`shared/page-patterns.json`](./shared/page-patterns.json) içeriği |
+| Enable Data Layer | açık (varsayılan kapalı) |
+| E-commerce Platform Preset | Akinon |
+| Use External Data Layer | açık |
+| External Data Layer Name | `dataLayer` |
 
-> Platformu **elle** seçin. Otomatik tespit Akinon'da güvenilmez:
-> `scripts.includes('akinon')`, `window.akinonBasket` ve `body.akinon`
-> koşullarının hiçbiri `magaza.com.tr` veya `brand.pl` üzerinde tutmuyor.
+Sayfa tipi önce Project Zero'nun `GLOBALS.page` değerinden okunur; ön ayarın
+URL desenleri yalnız onun söylemediği sayfalar içindir. `page-patterns.json`'ı
+yalnız bunları ezmek isterseniz girin.
 
 **3. Dosyalar**
 
 ```
-shared/selwise-ee-shim.js     →  templates/utils/selwise-ee-shim.js
 shared/selwise-basket-hook.js →  templates/utils/selwise-basket-hook.js
-pz-classic/selwise.html    →  templates/layout/selwise.html
-pz-classic/selwise-order.html → templates/orders/selwise-order.html
+pz-classic/selwise.html       →  templates/layout/selwise.html
+pz-classic/selwise-order.html →  templates/orders/selwise-order.html
 ```
 
-**4. `templates/layout/base.html`** — `<head>` içinde, GTM snippet'inin ve
-`window["dataLayer"] = ...` satırının **üstüne**:
+Eski nesil temalarda temel şablon `templates/base.html`'dir; dosyayı onun
+yanına koyun ve include yolunu buna göre yazın. Birden çok temel şablonu olan
+tema (marka ya da site görünümü başına bir tane) include'u her birine ister.
+
+**4. Temel şablon** — `<head>` içinde **ilk** satır olarak, GTM snippet'inin ve
+`window["dataLayer"] = ...` satırının üstüne:
 
 ```jinja
 {% include "layout/selwise.html" %}
 ```
 
-Sıra önemli: shim `dataLayer.push`'u sarmalıyor ve adaptörler olayları GTM
-yüklenene kadar biriktirip topluca boşaltıyor. Yine de shim dizide hazır olanı
-da yeniden oynatır, yani sıra kayarsa veri kaybı değil, sadece gecikme olur.
+İlk sırada olması sayfa deneylerinin ilk boyamadan önce gizlenmesi içindir.
+Kurulum kodunun güncel hâli panelde kanalın kurulum kartındadır.
 
-**5. Sipariş takibi** — checkout success template'inin sonuna:
+**5. Sipariş takibi** — sipariş başarı şablonu (`orders/success/index.html`)
+çoğu temada bir alt şablondur: include'u `{% block content %}` **içine**, temanın
+kendi `{% include "analytics/success.html" %}` satırının yanına koyun (blok
+dışına yazılan bir include hiçbir şey basmaz):
 
 ```jinja
 {% include "orders/selwise-order.html" %}
@@ -211,7 +224,9 @@ yansımaz. O temada:
   çekmeceyi açmak) `window.selwiseRefreshMiniBasket = function (basket) {…}`
   tanımlayın; `basket` eklemenin döndürdüğü sepettir.
 
-**7. Yedek kimlik** — `selwise.html`, oturum açmış üyenin Akinon kullanıcı
+**7. Yedek kimlik** — Selwise üyeyi temanın veri katmanından (`cd_userId`) kod
+gerektirmeden tanır; oturumu kapalı sayfada basılan `None` gibi boş değerler
+kimlik sayılmaz. Ek olarak `selwise.html`, oturum açmış üyenin Akinon kullanıcı
 kimliğini (şablon değişkeni `user.id`; `current_user` Django bağlamında yoktur) `Selwise.identify` ile gönderir: sunucu
 bağlantısının bu üyenin siparişlerine ve izinlerine yazdığı kimlik budur, tema
 veri katmanında kullanıcıyı adlandırmasa da ziyaret ve sipariş aynı müşteride
@@ -224,47 +239,47 @@ kez gönderilir.
 ```javascript
 localStorage.setItem('selwise_debug', 'true')
 // sayfayı yenile, sonra:
-window.selwiseLayer          // eeEvent yerine view_item / select_item görmelisiniz
-window.dataLayer[0].event    // ORİJİNAL adı korumalı (eeEvent)
+Selwise.explain()            // yüklenen, bekleyen ve çizilmeyen yüzeyler ve nedenleri
 ```
+
+Panelde kanalın kurulum kartındaki **Verify Now** etiketi sayfanın HTML'inde
+ya da sayfanın GTM kapsayıcısında arar; GTM ile kurulan kanal "GTM üzerinden"
+doğrulanır.
 
 ---
 
 ## Kurulum: PZ Next
 
-**1–2. Panel** — Django ile aynı, tek fark: `Source variable name` çoğu PZ Next
-projesinde `dataLayer` kalabilir, çünkü bu projeler tam GA4 seti basıyor ve
-`eeEvent` sorunu yok. Shim'e ihtiyaç duyup duymadığınızı şöyle kontrol edin:
-
-```bash
-grep -c "eeEvent\|eeCart" src/utils/gtm.ts   # 0 ise shim gerekmez
-```
+**1–2. Panel** — Django ile aynı (External Data Layer Name `dataLayer`). PZ
+Next projeleri çoğunlukla GA4, bir kısmı EE basar; Akinon ön ayarı ikisini de
+okur. Next'te `GLOBALS` yoktur, sayfa tipi ön ayarın URL desenlerinden gelir:
+`/product/<pk>`, `/group-product/<pk>`, `/category/<pk>`, `/list/` (listeleme;
+`search_text` varsa arama), `/baskets/basket`, `/orders/checkout`. Mağazanın
+özel (pretty) ürün ve kategori adresleri için deseni panelde ekleyin.
 
 **3. Script** — iki yol var:
 
 **(a) Kod deploy'u olmadan: mağazanın GTM kapsayıcısı.** Omnitron ve ACC'de
-vitrine script ekleyen bir alan yok. `external-gtm` CMS widget'ı yalnız bazı
-projelerde var ve **JavaScript olarak** çalıştırılıyor (kimi projede bir
-`<Script>` içinde, kimi yalnız tek `<script>` sarmalını açarak) — aşağıdaki
-HTML'i oraya yapıştırmak sözdizimi hatası verir ve aynı alandaki GTM kodunu da
-durdurabilir. GTM'de **Custom HTML** etiketi kullanın
-(`selwise.com/docs/integration/widget-installation`);
-`shared/selwise-loader.js` saf JavaScript olduğu için `external-gtm` alanına da
-yapıştırılabilir. Kanalın doğrulanması (Verify Now) ham HTML'de
-`data-site-key` aradığından GTM ile eklenen etiket bu kontrolde görünmez.
-Etiketin içeriği — dört satırın dördü de gerekli, ortadaki komut kuyruğu
-olmadan `async` yükleme sipariş çağrılarını sessizce düşürür:
+vitrine script ekleyen bir alan yok. GTM'de bir **Custom HTML** etiketi açıp
+panelde kanalın kurulum kartındaki kodu olduğu gibi yapıştırın, tetikleyici
+**All Pages** (`selwise.com/docs/integration/widget-installation`). Kodu
+elle kısaltmayın: komut kuyruğu olmadan `async` yükleme erken sipariş
+çağrılarını sessizce düşürür. Bazı projelerin kök layout'u bir Omnitron CMS
+widget'ının script'ini de basar (adı projeye göre değişir: `external-gtm`,
+`pznext-external-gtm`); bu alan **JavaScript olarak** çalıştırılır, birden çok
+etiketli HTML orada sözdizimi hatası verir ve aynı alandaki GTM kodunu da
+durdurabilir. Oraya yalnız saf JavaScript olan `shared/selwise-loader.js`
+yapıştırılabilir. GTM ile kurulan kanal panelde **GTM üzerinden** doğrulanır.
 
-```html
-<link rel="preconnect" href="https://widget.selwise.com" crossorigin>
-<link rel="preconnect" href="https://api.selwise.com" crossorigin>
-<script>window.Selwise=window.Selwise||{};window.Selwise.q=window.Selwise.q||[];['track','trackOrder','identify','setTraits','pushDataLayer','grantConsent','revokeConsent','showConsentPreferences','withdrawConsent','endJourney'].forEach(function(m){if(!window.Selwise[m])window.Selwise[m]=function(){window.Selwise.q.push([m,arguments])}});</script>
-<script async src="https://widget.selwise.com/client.js" data-site-key="SITE_KEY"></script>
-```
+GTM yoluyla gelmeyenler: ilk boyamadan önce gizleme (etiket GTM ile geç gelir;
+sayfa deneyinde kısa bir yanıp sönme olabilir), sunucu taraflı zenginleştirme
+ve 3b'deki sepet köprüsü. Bunlar kod ister.
 
 **(b) Kod ile.** [`pz-next/SelwiseScript.tsx`](./pz-next/SelwiseScript.tsx)
 dosyasını `src/components/selwise-script.tsx`'e kopyalayıp kök layout'un
-`<head>`'ine ekleyin.
+`<head>`'ine ekleyin (`@akinon/next` 1.x: `src/app/[commerce]/[locale]/[currency]/layout.tsx`,
+2.x: `src/app/[pz]/layout.tsx`). Bileşen `async`'tir; Next.js 14, 15 ve 16'da
+çalışır.
 
 **3b. Sepet köprüsü** — Selwise bir öneri şeridinden ya da aramadan ürün
 eklediğinde PZ Next'te başlıktaki sayı ve mini sepet **güncellenmez**: sepet
@@ -291,23 +306,25 @@ sabitlenmişse `@akinon/next/redux/reducers/root` içinde `openMiniBasket` ve
 mount etmek **yeterli değildir**: yalnız `refresh-basket` olayını dinler,
 sayacı `MiniBasket` etiketinden okuyan temalarda sayıyı güncellemez.
 
-**4. Eksik GA4 event'leri** —
-[`pz-next/selwise-events.ts`](./pz-next/selwise-events.ts) dosyasını
-`src/utils/selwise-events.ts`'e kopyalayın ve iki çağrı noktasını ekleyin.
+**4. Üyelik olayı** —
+[`pz-next/selwise-events.ts`](./pz-next/selwise-events.ts) temanın GA4
+katmanında olmayan `sign_up`'ı ekler; kaydolan üye o anda tanınır. Arama için
+gerekmez: Selwise araması açıkken aramayı Selwise'ın kendi API'si kaydeder ve
+Akinon ön ayarı veri katmanındaki `search` olayını bu yüzden eşlemez.
 
-`pz_next_project`'in GA4 katmanında `search`, `sign_up` ve `page_view` **yok**.
-`search` olmadan arama raporu ve aramadan gelen her attribution boş kalır.
-Dosyanın başındaki yorum blogu tam satır numaralarıyla nereye ekleneceğini
-anlatıyor.
+Üye kimliği PZ Next'te veri katmanından okunur: `user_data_updated` olayı ya
+da `{ user_id, user_logged_in }` sayfa değişkenleri. Temanız ikisini de
+basmıyorsa üye yalnız `login` / `sign_up` anında tanınır; o durumda oturum
+açmış kullanıcı için `Selwise.identify(String(user.pk))` çağırın.
 
 **5. Çoklu pazar** — proje tek deploy'dan birden fazla pazar servis ediyorsa
 (`src/utils/market-context.ts` içinde `SUPPORTED_CURRENCIES` uzunsa), pazar
 başına **ayrı bir Selwise sitesi** gerekir: bir Selwise sitesi tek domain, tek
 para birimi ve tek ürün feed'i taşır.
 
-Enjeksiyon noktası paylaşımlı olduğu için (`external-gtm` locale/currency
-parametresi olmadan çekiliyor) sabit bir `data-site-key` yedi pazarın trafiğini
-tek siteye yığar. Çözüm: [`shared/selwise-loader.js`](./shared/selwise-loader.js)
+Enjeksiyon noktası paylaşımlı olduğu için (GTM kapsayıcısı ya da CMS widget'ı
+locale/currency olmadan gelir) sabit bir `data-site-key` bütün pazarların
+trafiğini tek kanala yığar. Çözüm: [`shared/selwise-loader.js`](./shared/selwise-loader.js)
 veya `SelwiseScript.tsx` — ikisi de `location.hostname`'den anahtarı çözer.
 
 Eşlenmeyen bir host **hiçbir şey yüklemez**. Kasıtlı: varsayılan bir anahtara
@@ -315,70 +332,48 @@ düşmek staging ziyaretini üretim cirosu olarak kaydeder.
 
 ---
 
-## Kurulum: Appmaker (React Native)
+## Kurulum: App Maker (React Native)
 
-Ayrı paket: [`@selwise/react-native`](https://www.npmjs.com/package/@selwise/react-native) — kurulum,
-API anahtarı scope'ları, ekran adlandırma ve WebView köprüsü orada anlatılıyor.
-
-Üç şey burada da vurgulanmalı:
-
-1. **API anahtarı hem `mobile_read` HEM `mobile_write` taşımalı.** Native
-   `fetch` Origin göndermediği için sunucu anahtar + scope doğrulamasına düşer,
-   ve öneri *ürünleri* endpoint'i bir POST — sadece okuma anahtarı **yalnızca
-   orada** 403 döner.
-2. **WebView köprüsünü kurun.** Akinon vitrinleri uygulama içi WebView'da
-   dataLayer'ı `ReactNativeWebView.postMessage`'a yönlendirip `window.dataLayer`'a
-   hiç yazmıyor (`isInAppWebView()`), yani checkout akışı köprü olmadan tamamen
-   görünmez.
-3. **Bedenli ürün için varyant gruplamasını açın.** Sepete ekleme Akinon'un
-   numerik varyant pk'sını ister; feed'de `variantGrouping` açık olmadan kartta
-   beden seçici çıkmaz ve ürün detayına yönlendirmek gerekir. Aşağıdaki *Ürün
-   feed'i alan eşlemesi* bölümüne bakın.
+Akinon App Maker uygulaması Selwise eklentisiyle (`akinon-appmaker-plugin/`)
+kurulur; düz bir React Native / Expo uygulaması doğrudan
+[`@selwise/react-native`](https://www.npmjs.com/package/@selwise/react-native)
+ile. Adım adım: `selwise.com/docs/mobile/app-maker` ve
+`selwise.com/docs/mobile/setup`. App kanalının API anahtarı `mobile_read` ve
+`mobile_write` kapsamlarını birlikte taşır; uygulama içi WebView'daki ödeme
+akışı için `selwise.com/docs/mobile/webview-bridge`.
 
 ---
 
 ## Ürün kimliği — bir kere karar verin
 
-Kitin en sessiz tuzağı bu.
-
-Selwise ürün feed'indeki `item_code`, sitenin GA4 `item_id` değeriyle **birebir
-aynı** olmalı. Akinon projelerinde konvansiyon **proje başına** değişiyor:
-
-| Proje | GA4 `item_id` | PDP JSON-LD |
-|---|---|---|
-| `pz_classic_project` | `sku` | `sku` |
-| `pz_next_project` | `base_code.color` | `sku` |
-
-`pz_next_project` örneğinde aynı sayfa iki farklı kod yayımlıyor: Selwise'ın DOM
-okuyucusu JSON-LD `sku`'sunu, dataLayer köprüsü `item_id`'yi alır → tek ürün iki
-kodla kaydedilir.
-
-Kurulumdan önce şunu çalıştırın:
+Feed'in `item_code`'u (Akinon ön ayarında `sku`) mağazanın veri katmanının
+ürün kimliğiyle aynı uzayda olmalı. Akinon projelerinde bu proje başına
+değişir: `sku`, `base_code`, `base_code.renk`, hatta `pk`. Selwise sinyalleri
+`item_code`, `sku`, `cart_code` ve grup kodu (`base_code`) üzerinden çözer;
+bu dördü dışındaki bir değer (ör. `base_code.renk` birleşimi) hiçbir ürüne
+bağlanmaz. Kurulumdan önce temanın ne bastığına bakın:
 
 ```bash
-grep -n "item_id" src/utils/gtm.ts                    # PZ Next
-grep -rn "item_id" templates/utils/buildGA4Item.js    # Django PZ
+grep -rn "item_id\|\"id\":" src/utils/gtm.ts src/utils/analytics   # PZ Next
+grep -rn "item_id\|'id':" templates/analytics templates/utils        # Django PZ
 ```
 
-Sonra feed'i o değere göre üretin. `sku` kolonuna varyant SKU'sunu da yazın —
-analitiğin bir kısmı `itemCode OR sku` ile çözüyor, ama hepsi değil.
+Değer bu dört koddan biri değilse feed'e o değeri taşıyan bir kolon ekleyin ya
+da temanın bastığı kimliği düzeltin.
 
 ---
 
 ## Testler
 
 ```bash
-cd apps/client && npx jest --config ../../integrations/akinon/jest.config.js
+npx jest --config jest.config.js
 ```
 
-24 test: shim'in olay adı çözümü (özellikle `eeEvent` + `click` → `select_item`,
-`eeEvent` + `detail` → `view_item` ayrımı), `dataLayer`'ı kirletmeme garantisi,
-çift include'a karşı idempotency, ve loader'ın host eşleme kuralları
-(alt alan adı devralma, en uzun suffix kazanır, benzer domain eşleşmez).
-
-> `integrations/*` henüz `pnpm-workspace.yaml` kapsamında değil, o yüzden
-> `pnpm --filter` çalışmıyor ve CI bu testleri koşmuyor. Workspace ve CI'a
-> eklemek, paylaşımlı yapılandırma dosyalarına dokunan bir sonraki turun işi.
+Shim'in olay adı çözümü (özellikle `eeEvent` + `click` → `select_item`,
+`eeEvent` + `detail` → `view_item` ayrımı, üye ve rıza kayıtlarının aynalanması),
+`dataLayer`'ı kirletmeme garantisi, çift include'a karşı idempotency, sepet
+köprüsü ve loader'ın host eşleme kuralları (alt alan adı devralma, en uzun
+suffix kazanır, benzer domain eşleşmez).
 
 ---
 
@@ -405,25 +400,25 @@ tarayıcıda widget'a bırakın. Sözleşme: `selwise.com/docs/api-reference/ssr
 
 Vitrin kiti tarayıcıda olanı ölçer. Mağaza içi satış, çağrı merkezi siparişi,
 iptal ve iade, üyenin e-posta/SMS izni, fiyat ve stok değişimi tarayıcıdan
-geçmez: bunları panelde **Ayarlar → Entegrasyonlar → E-ticaret bağlantısı**
-okur (Omnitron entegrasyon kullanıcısıyla bir kez bağlanılır; parola
-saklanmaz). Kanalın e-ticaret platformu **Kanal ayarları**'nda `Akinon`
+geçmez: bunları panelde **Integrations → Store connection** okur (Omnitron
+entegrasyon kullanıcısıyla bir kez bağlanılır; parola saklanmaz). Kullanıcı
+kanalın Data Warehouse'unu okuyabilmeli (staff); okuyamıyorsa bağlantı bunu
+söyleyerek reddedilir. Kanalın e-ticaret platformu **Kanal ayarları**'nda `Akinon`
 seçilmelidir. Ayrıntı: `selwise.com/docs/integration/commerce-connection`.
 
 ---
 
 ## Kit ile sunucu tarafı arasındaki iş bölümü
 
-Denetimdeki maddelerin tamamı kapatıldı. Ama iki yol var ve hangisini
-kullandığınız kurulumu etkiliyor:
+İki yol var ve hangisini kullandığınız kurulumu etkiliyor:
 
 | Konu | Sunucu tarafı (bugün canlı) | Kit alternatifi |
 |---|---|---|
 | **`eeEvent` belirsizliği** | Ters eşleme `event + ecommerce action` bileşik anahtarını destekliyor (`eeEvent:detail`, `eeEvent:click`, …). Panelde platform `akinon` seçmek yeter. | `selwise-ee-shim.js` — aynı sorunu Akinon tarafından çözer, panelde `selwiseLayer` ayarı ister. Sürüm yükseltemeyen projeler için. |
-| **Sayfa tipi** | Profildeki desenler gerçek rotalara güncellendi (`/list/?search_text=`, `/baskets/basket`, `/product/`). | `page-patterns.json` — panelden ezmek isterseniz. |
+| **Sayfa tipi** | Django'da `GLOBALS.page`; Next'te ön ayarın URL desenleri (`/list/` listeleme, `search_text` ile arama, `/baskets/basket`, `/product/`, `/group-product/`). | `page-patterns.json` — panelden ezmek isterseniz. |
 | **Çoklu pazar** | `SiteDomain` alias tablosu: aynı katalog/para birimini paylaşan hostlar tek siteye bağlanır. | `selwise-loader.js` — farklı para birimli pazarlar hâlâ ayrı site ister, snippet hostname'den anahtarı çözer. |
 | **Sepet endpoint'i** | Otomatik tespit: PZ Next'te `/api/client/baskets/basket/`, Django'da `/baskets/basket/`. | — |
-| **Beden seçici** | Feed'de `variantGrouping` açıksa kart beden seçici render eder ve varyant pk'sıyla ekler. | — |
+| **Beden seçici** | Kart, bedenli ürünün bedenlerini ürün sayfasının JSON'undan (`?format=json`) okur ve seçilen bedenin pk'sıyla ekler. | — |
 | **Türkçe arama** | Aksan katlama canlı (`gomlek` → `Gömlek`). Dil bazlı kök bulma henüz yok. | — |
 | **Consent** | IAB TCF v2 ve Google Consent Mode v2 otomatik okunuyor. | — |
 
@@ -455,15 +450,16 @@ akıl yürütemeyeceği bir durumdur ve eski değer kazanırdı.
 
 | Selwise alanı | Akinon yolu | Neden |
 |---|---|---|
-| `id` | `base_code` | Akinon'da "ürün" modeldir; her beden/renk ayrı satırdır. Satırın `sku`'sunu kullanmak **her bedeni ayrı ürün** yapar. |
-| `variantCode` | `pk` | `/baskets/basket/` **yalnızca numerik varyant pk'sını** kabul eder. `sku` bariz kimlik gibi görünür ve reddedilir — sku ile kurulan seçici doğru render olur, sonra her eklemede patlar. |
-| `sku` | `sku` | Bazı projeler GA4 `item_id` olarak varyant sku'sunu basıyor; analitik iki kolonu da çözüyor. |
-| `itemGroupId` | `base_code` | Varyant gruplama anahtarı. |
+| `id` | `sku` | Bir satır bir üründür (`item_code`); bedeni ve rengi ayrı satırlar ayrı ürünlerdir, aile `itemGroupId`'de birleşir. |
+| `cartCode` | `pk` | `/baskets/basket/` **yalnızca numerik ürün pk'sını** kabul eder; `sku` ile yapılan ekleme reddedilir. |
+| `sku` | `sku` | |
+| `itemGroupId` | `base_code` | Ailenin kodu: renk/beden kardeşleri ve `base_code` basan temaların sinyalleri buraya bağlanır. |
 | `title` | `name` | |
 | `originalPrice` | `retail_price` | Akinon'un liste fiyatı. Bu olmadan **her ürün indirimsiz görünür** — jenerik alias'lar yalnızca `old_price`/`compare_at_price` biliyor. |
 | `currency` | `currency_type` | |
 | `imageUrl` | `productimage_set.0.image` | Skaler URL değil, sıralı görsel nesnesi dizisi. |
 | `url` | `absolute_url` | |
+| `productType`, `stock`, `inStock` | `product_type`, `stock`, `in_stock` | |
 | `brand` | `attributes_kwargs.integration_brand.label` | Attribute torbasında, etiketli. |
 | `size` | `attributes.pre_ent_beden` | Attribute anahtarı **proje kararı** — farklıysa bu satırı düzenleyin. |
 | `color` | `attributes.pre_ent_filtrelenebilir_renk` | Aynı şekilde. |
@@ -476,21 +472,12 @@ Eşleme değerleri artık **yol** olarak çözülür, düz anahtar olarak değil
 (`productimage_set.image`) çalışır. `g:` ve `@_` önekleri otomatik denenir,
 yani XML feed'i için önek yazmanız gerekmez.
 
-Bu daha önce **çalışmıyordu**: düz bir arama bu alanlar için sessizce
-`undefined` döndürüyor ve alan yanlış bir varsayılana düşüyordu. Marka, görsel,
-beden ve renk Akinon'da tam olarak bu dört alandı.
 
 ### Kimlik kontrolü — kurulumdan önce
 
-```bash
-grep -n "item_id" src/utils/gtm.ts                    # PZ Next
-grep -rn "item_id" templates/utils/buildGA4Item.js    # Django PZ
-```
-
-Feed'in `item_code`'u sitenin GA4 `item_id` değeriyle birebir aynı olmalı.
-`merchant-a` her ikisinde de `sku` kullanıyor; `pz_next_project` GA4'te
-`base_code.color` ama JSON-LD'de `sku` yayımlıyor. Eşleşmiyorsa gruplamayı
-açmadan önce kimliği hizalayın.
+Temanın veri katmanının bastığı ürün kimliği beslemenin `sku`, `pk` ya da
+`base_code` değerlerinden biri olmalı (bkz. *Ürün kimliği — bir kere karar
+verin*).
 
 ### Diğer feed şekilleri
 

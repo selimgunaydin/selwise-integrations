@@ -110,7 +110,15 @@
    * guessed at: recording a click as a view is worse than recording nothing.
    */
   function toMirroredEvent(item) {
-    if (!isObject(item) || typeof item.event !== 'string') return null;
+    // A consent command (`['consent', 'default' | 'update', {...}]`) is how
+    // the page's consent banner speaks; Selwise reads it from the layer.
+    if (Array.isArray(item)) return item[0] === 'consent' ? item : null;
+    if (!isObject(item)) return null;
+    // A push with no event name is page variables, not a hit: Project Zero's
+    // GTM adapter names the signed-in member this way (`{ cd_userId, … }`).
+    // Mirrored as it is — nothing in it can be double-counted.
+    if (item.event === undefined) return item;
+    if (typeof item.event !== 'string') return null;
 
     var eventName = item.event;
 

@@ -6,8 +6,5 @@
   "qaLinks": false,
   "analytics": {
     "active": true
-  },
-  "recommendation": {
-    "active": true
   }
 }

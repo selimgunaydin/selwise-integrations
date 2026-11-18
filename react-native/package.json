@@ -1,6 +1,6 @@
 {
   "name": "@selwise/react-native",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Selwise SDK for React Native apps — tracking, recommendations, search and order attribution, and the components that draw campaigns, recommendation strips, search and product content.",
   "license": "MIT",
   "private": false,

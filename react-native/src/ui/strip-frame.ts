@@ -1,4 +1,5 @@
 import { toNativeStyle, type AppStyleContext, type NativeStyle } from '../vendor/app-style.js';
+import { SLOT_SURFACE_INSET_PX } from '../vendor/surface-geometry.js';
 import { stripHeading } from './strip-heading.js';
 
 /**
@@ -22,6 +23,16 @@ import { stripHeading } from './strip-heading.js';
  */
 
 type Bag = Record<string, unknown>;
+
+/**
+ * The container padding of a strip that stores none (one a host built by hand),
+ * in px: the page inset on every side (`SLOT_SURFACE_INSET_PX`, the one a
+ * campaign or an enrichment block drawn in a point gets), so it sits on the same
+ * rhythm as the rest of the screen. A padding the strip DOES store is drawn
+ * exactly as stored: the dashboard writes an app strip the phone's padding when
+ * it is created, so nothing here second-guesses a value.
+ */
+export const STRIP_PHONE_PADDING = Object.freeze({ vertical: SLOT_SURFACE_INSET_PX, horizontal: SLOT_SURFACE_INSET_PX });
 
 const isBag = (value: unknown): value is Bag => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -141,6 +152,13 @@ export function stripFrameOf(
   // box a CSS block fills up to its `maxWidth`. The cards are sized by this box, so it takes the width and
   // `maxWidth` is the cap, as in CSS.
   if (container['alignSelf'] === 'center' && container['width'] === undefined) container['width'] = '100%';
+  // A strip that stores no padding at all gets the phone's; a stored one is drawn as typed.
+  const stored = isBag(w['containerStyles']) ? w['containerStyles']['padding'] : undefined;
+  const hasStoredPadding = typeof stored === 'string' ? stored.trim() !== '' : stored !== undefined && stored !== null;
+  if (!hasStoredPadding) {
+    container['paddingVertical'] = STRIP_PHONE_PADDING.vertical;
+    container['paddingHorizontal'] = STRIP_PHONE_PADDING.horizontal;
+  }
 
   let dots: StripDotsView | null = null;
   if (isBag(w['dotStyles'])) {

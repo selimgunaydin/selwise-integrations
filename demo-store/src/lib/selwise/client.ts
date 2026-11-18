@@ -451,6 +451,18 @@ export function consentedVisitor(category: keyof ConsentState) {
   };
 }
 
+/**
+ * The visitor's consent as the public API expects it beside a visitor-carrying
+ * event (`consentSnapshot`: `{ granted, categories, timestamp, source }`, the
+ * shape the widget sends). The API judges each event against it, so a direct
+ * call that leaves it out is dropped. Null while the widget has no answer yet.
+ */
+export function consentSnapshot(source = 'headless') {
+  const categories = selwiseInstance()?.getConsentState?.();
+  if (!categories) return null;
+  return { granted: true, categories, timestamp: Date.now(), source };
+}
+
 /** The public API base of this channel, as the browser calls it (Origin-authenticated, no key). */
 export const publicSiteUrl = (apiUrl: string, siteKey: string) => `${apiUrl}/public/sites/${encodeURIComponent(siteKey)}`;
 

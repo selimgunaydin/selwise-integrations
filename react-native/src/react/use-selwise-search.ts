@@ -70,8 +70,22 @@ export interface UseSelwiseSearchResult {
    * The address the channel sends this search to (a redirect the merchant set
    * for the term), or null. Check it before drawing results: a redirected term
    * returns no hits, and it is not a zero-result search.
+   *
+   * Set only after `submit()`: a term the shopper is still typing never
+   * redirects, however many rules it starts to match on the way.
    */
   redirect: string | null;
+  /**
+   * The shopper submitted the term (the keyboard's search key, a tapped recent or
+   * popular search; `pickSuggestion` does it for you). Asks again as a
+   * submission: a merchant's redirect rule then answers (`redirect`) and the
+   * term enters the recent searches. Typing does neither. `term` defaults to the
+   * query; one shorter than the channel searches from is ignored.
+   *
+   * Returns `true` when a redirect rule is already known for the term — the
+   * answer arrives as `redirect`, so do not also open your own results page.
+   */
+  submit: (term?: string) => boolean;
   /**
    * `ready` once the channel's search ran; `off` when search is switched off for
    * the channel or this visitor is outside it (audience, an experiment's holdout)
@@ -171,6 +185,11 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
   // ---- what the shopper asked ----
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
+  // The next request is a submission (`submit()`); asked once, then cleared.
+  const submitNext = useRef(false);
+  const [submitVersion, setSubmitVersion] = useState(0);
+  // Where a submission of the term last searched would go, as the typed answer said.
+  const submitHint = useRef<{ term: string; url: string } | null>(null);
   const [category, setCategoryState] = useState<string | null>(categoryOption ?? null);
   const [sort, setSort] = useState<SearchSort>(sortOption ?? 'relevance');
   const term = query.trim();
@@ -214,8 +233,14 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
     moreInFlight.current = false;
     setLoadingMore(false);
 
+    // The flag belongs to this run alone: one that could not run (search off, a
+    // term too short) must not turn a later, typed search into a submission.
+    const submitted = submitNext.current;
+    submitNext.current = false;
+
     if (!wanted) {
       lastTerm.current = null;
+      submitHint.current = null;
       setHits([]);
       setTotal(0);
       setRedirect(null);
@@ -233,10 +258,18 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
     const refinement = lastTerm.current === requestTerm;
     setLoadingFirst(true);
     selwise
-      .search(requestTerm, { ...optionsRef.current, sort, ...(category ? { category } : {}), refinement }, controller.signal)
+      .search(
+        requestTerm,
+        { ...optionsRef.current, sort, ...(category ? { category } : {}), refinement, ...(submitted ? { submit: true } : {}) },
+        controller.signal
+      )
       .then((result) => {
         if (!active) return;
         lastTerm.current = requestTerm;
+        submitHint.current =
+          typeof result.submitRedirect === 'string' && result.submitRedirect
+            ? { term: requestTerm, url: result.submitRedirect }
+            : null;
         setHits(result.hits);
         setTotal(typeof result.total === 'number' ? result.total : result.hits.length);
         setRedirect(typeof result.redirect === 'string' && result.redirect ? result.redirect : null);
@@ -264,7 +297,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
       active = false;
       controller.abort();
     };
-  }, [selwise, wanted, requestTerm, category, sort, locale]);
+  }, [selwise, wanted, requestTerm, category, sort, locale, submitVersion]);
 
   const hasMore = hits.length > 0 && hits.length < total && hits.length < SEARCH_DEPTH;
 
@@ -385,6 +418,22 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
     [selwise]
   );
 
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const minCharsRef = useRef(minChars);
+  minCharsRef.current = minChars;
+  const submit = useCallback((next?: string): boolean => {
+    const text = (next ?? queryRef.current).trim();
+    if (text.length < minCharsRef.current) return false;
+    submitNext.current = true;
+    if (next !== undefined) setQuery(next);
+    // No debounce for a shopper who asked: the request goes now, whatever the
+    // box held a moment ago, and again for the same term already searched.
+    setDebounced(text);
+    setSubmitVersion((version) => version + 1);
+    return submitHint.current?.term === text;
+  }, []);
+
   const pickSuggestion = useCallback(
     (kind: SearchSuggestionKind, value: string | SelwiseProduct) => {
       if (kind === 'popularProduct' && typeof value !== 'string') selwise.trackSuggestionClick('popularProduct', value);
@@ -394,10 +443,11 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
         setQuery('');
         setCategoryState(value);
       } else if (kind === 'recent' || kind === 'popularSearch') {
-        setQuery(value);
+        // A tapped term is a submission: the shopper picked this very term.
+        submit(value);
       }
     },
-    [selwise]
+    [selwise, submit]
   );
 
   const setCategory = useCallback((next: string | null) => setCategoryState(next), []);
@@ -428,6 +478,7 @@ export function useSelwiseSearch(options: UseSelwiseSearchOptions = {}): UseSelw
     loadingMore,
     error,
     redirect,
+    submit,
     status: state,
     isZeroResults:
       hasSearched &&

@@ -65,3 +65,17 @@ export function slotBelongsToScreen(slot: string, pageUrl: string | null | undef
   return appScreenOfUrl(pageUrl)?.slots.includes(slot) ?? false;
 }
 
+
+/**
+ * The space a floating element keeps clear at the bottom of the screen: the safe
+ * area, or — when a bar is docked to the bottom — the whole dock (its height
+ * already includes the safe-area padding it carries), whichever is larger, so a
+ * floating button in a bottom corner never sits on a docked bar's button or
+ * close control. The web lifts the same corner by what its bars reserve.
+ *
+ * `dockHeight` is what the dock measured; it is ignored while no bar is docked
+ * (a stale measurement of a bar that left must not lift anything).
+ */
+export function bottomReserve(safeAreaBottom: number, dockHeight: number, docked: boolean): number {
+  return docked && dockHeight > safeAreaBottom ? dockHeight : safeAreaBottom;
+}

@@ -35,6 +35,7 @@ import { stripFrameOf } from './strip-frame.js';
 import { cardGap, phoneColumns, roleLanguage } from './strip-layout.js';
 import { createVisibilityGate } from './strip-visibility.js';
 import { appLanguage } from './strings.js';
+import { slotOfWidget } from './slots.js';
 import { Grid, List, Look, RoleTabs, Slider, type ViewBase } from './StripViews.js';
 import { DefaultCard } from './card/DefaultCard.js';
 import { VariantSheet } from './card/VariantSheet.js';
@@ -504,7 +505,7 @@ export function RecommendationStrip(props: RecommendationStripProps): ReactEleme
       body = h(Grid, base);
   }
 
-  const container = isRecord(settings['containerStyles']) ? frame.container : { paddingVertical: 12, paddingHorizontal: 16 };
+  // `stripFrameOf` gives a strip with no stored padding the phone's.
   const list = h(
     View,
     {
@@ -532,7 +533,7 @@ export function RecommendationStrip(props: RecommendationStripProps): ReactEleme
 
   return h(
     View,
-    { testID: pickId('container'), style: [container, { position: 'relative' }, style] },
+    { testID: pickId('container'), style: [frame.container, { position: 'relative' }, style] },
     heading,
     frame.subtitle ? h(HeadingText, { testID: pickId('text'), style: frame.subtitle.style }, frame.subtitle.text) : null,
     listWrapper ? h(listWrapper, { widget }, list) : list,
@@ -611,7 +612,10 @@ export interface RecommendationStripsProps extends StripFrameProps {
   context?: Record<string, unknown>;
 }
 
-/** Every strip a screen has, in the order the merchant placed them. */
+/**
+ * Every strip a screen has, in the order the merchant placed them — except that
+ * strips sent to the same point compete for it and one is drawn (see `<SelwiseSlot>`).
+ */
 export function RecommendationStrips(props: RecommendationStripsProps): ReactElement | null {
   const client = useSelwise();
   const ready = useSelwiseReady();
@@ -631,7 +635,8 @@ export function RecommendationStrips(props: RecommendationStripsProps): ReactEle
     }
 
     client.strips
-      .strips(screen, context || {}, { followCart: true })
+      // Strips placed in the same point of the screen compete for it, as in a web container.
+      .strips(screen, context || {}, { followCart: true, scopeOf: (entry) => slotOfWidget(entry.listed, screen) })
       .then((result) => {
         if (!cancelled) setStrips(result);
       })

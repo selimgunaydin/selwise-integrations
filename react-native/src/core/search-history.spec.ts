@@ -21,6 +21,17 @@ describe('RecentSearches', () => {
     expect(await recent.list(10)).toEqual(['CEKET', 'pantolon']);
   });
 
+  it('replaces the newest entry with its continuation, and leaves an older one alone', async () => {
+    const { recent } = create();
+    await recent.add('aya');
+    await recent.add('ayakkabı');
+    expect(await recent.list(10)).toEqual(['ayakkabı']);
+
+    await recent.add('çanta');
+    await recent.add('ayakkabı siyah');
+    expect(await recent.list(10)).toEqual(['ayakkabı siyah', 'çanta', 'ayakkabı']);
+  });
+
   it('cuts the list to the number asked for, and keeps a bounded number', async () => {
     const { recent } = create();
     for (let i = 0; i < RECENT_SEARCH_LIMIT + 5; i += 1) await recent.add(`terim ${i}`);

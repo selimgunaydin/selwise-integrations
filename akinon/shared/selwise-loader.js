@@ -3,25 +3,23 @@
  *
  * ## The problem it solves
  *
- * A Selwise site is one domain, one currency and one product feed. Some Akinon
- * deployments serve many markets from a single build — `pz_next_project` covers
- * 7 countries, 7 currencies and 9 locales — so each market needs its OWN site
- * key.
+ * A Selwise channel is one domain, one currency and one product feed. Some
+ * Akinon deployments serve many markets (several countries, currencies and
+ * locales) from a single build, so each market needs its OWN channel key.
  *
- * But the injection point is shared: PZ Next reads the script from the
- * `external-gtm` CMS widget and fetches it WITHOUT locale or currency, so every
- * market receives the same snippet. A hardcoded `data-site-key` would send all
- * seven markets' traffic into one site, mixing currencies and catalogues.
+ * But the injection point is shared: a GTM container, or a CMS widget some PZ
+ * Next projects print, is fetched WITHOUT locale or currency, so every market
+ * receives the same snippet. A hardcoded `data-site-key` would send every
+ * market's traffic into one channel, mixing currencies and catalogues.
  *
  * This loader resolves the key from `location.hostname` instead, so one snippet
  * serves every market correctly.
  *
  * ## Single-market projects
  *
- * Do not use this. Use the plain snippet — it needs no map. Take it verbatim
- * from docs/integration/widget-installation (or the dashboard's Installation
- * panel); all three of its lines are load-bearing, and the command-queue stub
- * in the middle is what keeps an `async` tag from dropping an inline
+ * Do not use this. Use the channel's installation code from the dashboard
+ * verbatim (selwise.com/docs/integration/widget-installation): the command-queue
+ * stub in it is what keeps an `async` tag from dropping an inline
  * `window.Selwise?.trackOrder(...)` on the order-confirmation page:
  *
  *   <link rel="preconnect" href="https://widget.selwise.com" crossorigin>

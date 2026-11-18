@@ -128,7 +128,7 @@ import {
   type TrackOptions,
 } from './types.js';
 
-export const SDK_VERSION = '2.0.0';
+export const SDK_VERSION = '2.0.1';
 
 /** How many links opened before init() resolves are kept for it. */
 const PENDING_DEEP_LINKS_MAX = 5;
@@ -415,8 +415,13 @@ export class Selwise {
     this.experiments = new ExperimentGate();
     this.segments = new SegmentGate(async (segmentIds, context) => {
       // Reading the visitor's segments is personalization: without that
-      // consent they are in no segment, and their ids are not sent.
-      if (!this.consentAllows('personalization')) return {};
+      // consent they are in no segment — `false` for every id, a decision and
+      // not the unknown (`null`) a failed request is — and their ids are not
+      // sent. An empty answer would read as "unknown" and hide every
+      // exclude-targeted surface from a visitor who has not allowed it.
+      if (!this.consentAllows('personalization')) {
+        return Object.fromEntries(segmentIds.map((id) => [id, false] as const));
+      }
       const siteUserId = this.identity.getSiteUserId();
       const pageUrl = context?.pageUrl ?? this.currentPageUrl;
       const response = await this.endpointsApi.evaluateSegments({
@@ -437,6 +442,7 @@ export class Selwise {
         ...this.appFacts(),
         screenDaysAgo: this.visitor.screenDaysAgo(),
       });
+      // Whatever the answer lacks is unknown to the gate.
       return response?.results ?? {};
     }, undefined, undefined, () => this.identity.getSiteUserId() || undefined);
     this.testMode = options.testMode === true;

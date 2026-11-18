@@ -54,6 +54,12 @@ export function ResultRow(props: { product: SelwiseProduct; onPress: () => void 
 export interface SelwiseSearchProps {
   /** What the shopper typed — the app keeps its own input. */
   query: string;
+  /**
+   * `query` is a term the shopper SUBMITTED (the keyboard's search key), not one
+   * they are still typing. Only then does a merchant's redirect rule send them
+   * elsewhere and does the term enter the recent searches. Default: typing.
+   */
+  submitted?: boolean;
   /** Results per page. Default: the channel's own (Search → Behaviour). */
   limit?: number;
   /** Below this length nothing is searched. Default: the channel's own. */
@@ -74,7 +80,7 @@ export interface SelwiseSearchProps {
  * (suggestions, categories, the add to the basket) use `<SelwiseSearchPanel>`.
  */
 export function SelwiseSearch(props: SelwiseSearchProps): ReactElement | null {
-  const { query, limit, minChars, debounceMs, renderItem, onProductPress, renderEmpty } = props;
+  const { query, submitted, limit, minChars, debounceMs, renderItem, onProductPress, renderEmpty } = props;
   useBrandTheme();
   const navigate = useNavigate();
   const search = useSelwiseSearch({
@@ -82,11 +88,14 @@ export function SelwiseSearch(props: SelwiseSearchProps): ReactElement | null {
     ...(minChars !== undefined ? { minChars } : {}),
     ...(debounceMs !== undefined ? { debounceMs } : {}),
   });
-  const { setQuery, open, redirect, status } = search;
+  const { setQuery, submit, open, redirect, status } = search;
 
   useEffect(() => {
     setQuery(String(query || ''));
-  }, [query, setQuery]);
+    // The app's own input said it: only a submitted term follows a merchant's
+    // redirect rule and enters the recent searches.
+    if (submitted) submit(String(query || ''));
+  }, [query, submitted, setQuery, submit]);
 
   // The list is on screen: that is the search being open.
   useEffect(() => {

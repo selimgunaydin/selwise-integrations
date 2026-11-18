@@ -306,11 +306,18 @@ export class SearchService {
 
     const offset = Math.max(0, Math.floor(options.offset ?? 0));
     const { refinement, ...request } = options;
-    const answer = await this.host.search(
+    const submit = options.submit === true;
+    const raw = await this.host.search(
       term,
-      { ...request, limit: options.limit ?? settings?.behavior.maxResults, offset: offset || undefined },
+      { ...request, submit, limit: options.limit ?? settings?.behavior.maxResults, offset: offset || undefined },
       signal
     );
+    // A typed term whose rule matched carries the ordinary results and the
+    // rule's address: the address is not the host's to follow (the shopper is
+    // still typing), only to know about (`submitRedirect`).
+    const { redirect: matched, ...ordinary } = raw;
+    const answer: SearchResult =
+      submit || typeof matched !== 'string' || !matched.trim() ? raw : { ...ordinary, submitRedirect: matched };
 
     // A channel with search switched off answers `enabled: false` and no hits.
     // That is not a search that found nothing, so it is neither reported as a
@@ -341,6 +348,13 @@ export class SearchService {
     // browse (no term) is not the shopper's phrasing at all.
     const isNewSearch = !refinement && offset === 0 && !!term && term.length >= (settings?.behavior.minChars ?? 1);
     if (isNewSearch) this.report(term, result);
+    // Only a SUBMITTED term enters the history — not every pause of the typing —
+    // and not as part of the report: a submission of a term already searched
+    // while typing is a refinement, which is not reported again.
+    const minChars = settings?.behavior.minChars ?? 1;
+    if (submit && offset === 0 && term.length >= minChars && resultCount(result) > 0 && !result.redirect) {
+      void this.recent().add(term).catch((error) => this.host.log('Recent search not kept', error));
+    }
     return result;
   }
 
@@ -369,9 +383,6 @@ export class SearchService {
       // `resultsCount` is the key the search report and the API's search log read.
       metadata: { query: term, resultsCount: count },
     });
-    // Only terms that found something: offering a shopper their own typo back is
-    // a dead end presented as a shortcut.
-    if (count > 0) void this.recent().add(term).catch((error) => this.host.log('Recent search not kept', error));
   }
 
   // ---- events ----

@@ -1756,6 +1756,22 @@ export function countdownTarget(content: Record<string, unknown> | null | undefi
 }
 
 /**
+ * Why a countdown has nothing to count to, or null when it has. `target` is
+ * `countdownTarget(...)` read by whoever draws (the widget; the app reads it
+ * through its own injectable resolver), so the WORD for each case is one list:
+ * `no_end` (the content names no end and no daily cutoff) and `countdown_over`
+ * (the end has passed). Either way the countdown is not a surface: a bar of
+ * `00:00:00:00` would tell the shopper an offer is live when it is not, and
+ * both channels answer `Selwise.explain()` with `content` and this cause.
+ */
+export type CountdownMiss = 'no_end' | 'countdown_over';
+
+export function countdownMissOf(target: number | null | undefined, now: number): CountdownMiss | null {
+  if (typeof target !== 'number' || !Number.isFinite(target)) return 'no_end';
+  return target <= now ? 'countdown_over' : null;
+}
+
+/**
  * The unit words under a countdown's digits, in the STOREFRONT's language
  * (`<html lang>`), not the panel's. They were English literals ("Days",
  * "Hours") on every store, Turkish ones included. A language not listed reads

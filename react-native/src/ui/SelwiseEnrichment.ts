@@ -1,7 +1,8 @@
 import { createElement as h, useEffect, useMemo, useRef, useState, type ElementRef, type ReactElement } from 'react';
 import { AppState, Dimensions, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSelwise, useSelwiseHost } from '../react/context.js';
-import { useConfigVersion, useSelwiseReady, useThemeVersion } from '../react/use-selwise-state.js';
+import { useConfigVersion, useScreen, useSelwiseReady, useThemeVersion } from '../react/use-selwise-state.js';
+import { appScreenOfUrl } from '../vendor/app-surfaces.js';
 import type { EnrichmentItem } from '../core/enrichment.js';
 import {
   buildEnrichmentDocument,
@@ -67,6 +68,19 @@ export interface SelwiseEnrichmentProps {
   probe?: boolean;
 }
 
+/**
+ * Whether the screen in front of the shopper is one a product's content can be
+ * placed on. Content is keyed by a product, so it belongs to a product screen;
+ * on any other screen the app knows by name (the basket, the home screen) a slot
+ * with no rule behind it is the ordinary case, not a mistake to report. A screen
+ * the app has not named, or one the catalogue does not list, is still judged as
+ * before.
+ */
+export function enrichmentAppliesOn(screen: { pageUrl: string | null; pageType: string | null }): boolean {
+  const type = screen.pageType || appScreenOfUrl(screen.pageUrl)?.pageType;
+  return !type || type === 'product';
+}
+
 function tallestReservation(items: readonly EnrichmentItem[]): number {
   let tallest = 0;
   for (const item of items) {
@@ -91,6 +105,10 @@ export function SelwiseEnrichment(props: SelwiseEnrichmentProps): ReactElement |
   const { code, slot, style, theme, onNavigate, only, onPress, probe } = props;
   const client = useSelwise();
   const host = useSelwiseHost();
+  const screen = useScreen();
+  // Asked quietly off a product screen: an empty answer is then not for `explain()` to list.
+  const quiet = useRef(probe === true || !enrichmentAppliesOn(screen));
+  quiet.current = probe === true || !enrichmentAppliesOn(screen);
   const WebView = host.WebView;
   const navigate = useNavigate();
   useBrandTheme();
@@ -136,7 +154,7 @@ export function SelwiseEnrichment(props: SelwiseEnrichmentProps): ReactElement |
     if (!ready || !productCode || !slotName) return undefined;
 
     client
-      .getEnrichment(productCode, [slotName], undefined, { probe: probe === true })
+      .getEnrichment(productCode, [slotName], undefined, { probe: quiet.current })
       .then((result) => {
         if (cancelled) return;
         const forSlot = client.enrichmentForSlot(result, slotName);

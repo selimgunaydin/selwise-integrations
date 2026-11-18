@@ -949,6 +949,9 @@ const MAPPERS = {
   userLogin,
   userRegister,
   userLogout,
+  // The member erased their account from the app's settings: the device
+  // stops speaking for them, exactly as on logout.
+  anonymizeUser: userLogout,
   appOnBackground
 };
 

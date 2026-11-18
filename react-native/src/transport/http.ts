@@ -20,7 +20,7 @@ export interface RequestOptions {
   body?: unknown;
   /**
    * Omit `x-selwise-api-key`. Only for the ungated analytics endpoints
-   * (`events/batch`, `recommendations/track/*`), which run without `PublicSiteGuard`.
+   * (`events/batch`, `presence`), which run without `PublicSiteGuard`.
    */
   unauthenticated?: boolean;
   /**

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { consentedVisitor, postJson, publicSiteUrl, withSelwise } from '@/lib/selwise/client';
+import { consentSnapshot, consentedVisitor, postJson, publicSiteUrl, withSelwise } from '@/lib/selwise/client';
 import { HeadlessCard, type HeadlessProduct } from './HeadlessCard';
 
 /**
@@ -77,7 +77,8 @@ export function PersonalStrip({ apiUrl, siteKey, widgetId, title, lang }: Props)
 
   const track = (eventType: 'impression' | 'click', productItemCode?: string, position?: number) => {
     const visitor = consentedVisitor('marketing');
-    if (!visitor) return;
+    const consent = consentSnapshot();
+    if (!visitor || !consent) return;
     void postJson(
       `${base}/recommendations/track/event`,
       {
@@ -90,6 +91,7 @@ export function PersonalStrip({ apiUrl, siteKey, widgetId, title, lang }: Props)
         userId: visitor.siteUserId,
         pageUrl: window.location.href,
         metadata: position != null ? { position, source: 'headless' } : { source: 'headless' },
+        consentSnapshot: consent,
       },
       eventType === 'click', // the click navigates away
     );

@@ -545,6 +545,17 @@ export function evaluatePageTypeTargeting(
   return (pageTypes.types as readonly string[]).includes(String(pageType).toLowerCase());
 }
 
+/**
+ * A page rule that matches NO page: `showOnAllPages` false and no include
+ * pattern (a blank row is no pattern). `evaluatePageTargeting` answers false on
+ * every page for it, so every writer — the dashboard's forms and the API —
+ * refuses it with this same answer rather than restating the condition.
+ */
+export function pageTargetingMatchesNothing(targetingInput: unknown): boolean {
+  const targeting = normalizePageTargeting(targetingInput);
+  return targeting.showOnAllPages === false && targeting.includeUrls.length === 0;
+}
+
 export function evaluatePageTargeting(
   targetingInput: unknown,
   currentUrl: string,
@@ -563,7 +574,7 @@ export function evaluatePageTargeting(
   }
 
   if (targeting.showOnAllPages === false) {
-    if (targeting.includeUrls.length === 0) return false;
+    if (pageTargetingMatchesNothing(targeting)) return false;
     if (!normalizedCurrentUrl) return false;
 
     const included = targeting.includeUrls.some((pattern) =>

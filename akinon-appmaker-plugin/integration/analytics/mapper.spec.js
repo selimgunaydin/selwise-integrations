@@ -361,6 +361,8 @@ describe('identity', () => {
 
   it('resets on logout', () => {
     expect(mapEvent('userLogout', {}, {}, {})).toEqual([{ kind: KIND.RESET }]);
+    // Erasing the account in the app's settings also detaches the device.
+    expect(mapEvent('anonymizeUser', {}, {}, {})).toEqual([{ kind: KIND.RESET }]);
   });
 });
 

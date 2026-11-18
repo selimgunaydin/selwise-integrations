@@ -3,18 +3,20 @@
  *
  * ## Why this exists
  *
- * `pz_next_project/src/utils/gtm.ts` pushes a solid GA4 set — `view_item`,
- * `view_item_list`, `select_item`, `add_to_cart`, `remove_from_cart`,
- * `view_cart`, `begin_checkout`, `add_shipping_info`, `add_payment_info`,
- * `purchase`, `login`, `add_to_wishlist`.
+ * Many PZ Next themes push a solid GA4 set — `view_item`, `view_item_list`,
+ * `select_item`, `add_to_cart`, `remove_from_cart`, `view_cart`,
+ * `begin_checkout`, `add_shipping_info`, `add_payment_info`, `purchase`,
+ * `login`, `add_to_wishlist` — and some leave out `search` and `sign_up`.
  *
- * Three standard events are MISSING: `search`, `sign_up` and `page_view`.
- * Consequences:
- *
- *   • no `search`   → the Selwise search report and every search-sourced
- *                     attribution stays empty, even though the site has search
- *   • no `sign_up`  → the registration funnel has no completion step
- *   • no `page_view`→ handled elsewhere, see below
+ *   • no `sign_up` → Selwise does not learn who a new member is at the moment
+ *                    they register, and the registration funnel has no
+ *                    completion step
+ *   • no `search`  → the store's OWN GA4 property has no site-search report.
+ *                    Selwise does not need it: with Selwise search on, the
+ *                    query is recorded by Selwise's search API, and the Akinon
+ *                    preset deliberately maps no data-layer `search` (a second
+ *                    writer would double-count the zero-results report).
+ *                    Push it for GA4's sake, not for Selwise's.
  *
  * ## What this module does and does not push
  *

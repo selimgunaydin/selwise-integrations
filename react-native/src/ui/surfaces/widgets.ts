@@ -2,6 +2,7 @@ import { createElement as h, Fragment, useEffect, useRef, useState, type ReactEl
 import { Animated, Pressable, View } from 'react-native';
 import { useSelwiseHost } from '../../react/context.js';
 import { countdownUnitLabels, type GoalBarView } from '../../vendor/dynamic-content.js';
+import { floatingButtonShape } from '../../vendor/surface-geometry.js';
 import { counterIconName, counterParts, counterTemplate, COUNTER_ICON_GLYPHS, countDuration, formatCount } from '../counter.js';
 import { countdownSeparator, type CountdownUnits } from '../countdown.js';
 import { goalBarLook } from '../goal-bar.js';
@@ -103,6 +104,7 @@ export function FloatingButton(props: SurfaceRendererProps & { insets?: { top: n
   const offsetY = px(styles['offsetY'], 16) + (top ? insets?.top ?? 0 : insets?.bottom ?? 0);
   const pulse = usePulse(nativeValues('floating', styles)['pulse'] === true);
   const label = String(content['label'] ?? content['text'] ?? '').trim() || '★';
+  const shape = floatingButtonShape({ text: label, size: styles['size'], borderRadius: styles['borderRadius'] });
   const tooltipText = String(content['tooltip'] ?? '').trim();
 
   const [tipShown, setTipShown] = useState(true);
@@ -138,9 +140,22 @@ export function FloatingButton(props: SurfaceRendererProps & { insets?: { top: n
       onLongPress: tooltipText ? showTip : undefined,
       accessibilityRole: 'button',
       accessibilityLabel: label,
-      style: [base.floatingCircle, { width: size, height: size }, containerStyle(styles, { sizeForPercent: size })],
+      style: [
+        base.floatingCircle,
+        // An icon is the circle it always was; words are a pill as wide as they are (the widget draws
+        // the same answer, `floatingButtonShape`). A fixed square wrapped "Yardım mı Lazım?" onto
+        // three lines and overflowed it.
+        shape.kind === 'circle'
+          ? { width: size, height: size }
+          : { minHeight: size, paddingHorizontal: shape.paddingX, paddingVertical: 8 },
+        containerStyle(styles, { sizeForPercent: size }),
+      ],
     },
-    h(Text, { testID: pickId('text', 'label'), style: [base.floatingLabel, textStyle(styles, { defaultSize: 20 })] }, label)
+    h(
+      Text,
+      { testID: pickId('text', 'label'), style: [base.floatingLabel, textStyle(styles, { defaultSize: shape.kind === 'circle' ? 20 : 14 })] },
+      label
+    )
   );
 
   return h(

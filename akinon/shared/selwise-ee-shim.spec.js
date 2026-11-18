@@ -104,6 +104,15 @@ describe('toMirroredEvent', () => {
     expect(toMirroredEvent({ event: 'eeEvent', ecommerce: { impressions: [] } })).toBeNull();
   });
 
+  it("mirrors the member and the consent banner's commands as they are", () => {
+    const member = { cd_userId: 397405, cd_userEmail: 'f'.repeat(64) };
+    expect(toMirroredEvent(member)).toBe(member);
+    const consent = ['consent', 'update', { analytics_storage: 'granted' }];
+    expect(toMirroredEvent(consent)).toBe(consent);
+    expect(toMirroredEvent(['config', 'G-1'])).toBeNull();
+    expect(toMirroredEvent({ event: 42 })).toBeNull();
+  });
+
   it('ignores GTM internal events', () => {
     expect(toMirroredEvent({ event: 'gtm.js' })).toBeNull();
     expect(toMirroredEvent({ event: 'gtm.dom' })).toBeNull();
@@ -115,7 +124,7 @@ describe('toMirroredEvent', () => {
     expect(toMirroredEvent(undefined)).toBeNull();
     expect(toMirroredEvent('string')).toBeNull();
     expect(toMirroredEvent([])).toBeNull();
-    expect(toMirroredEvent({ noEvent: true })).toBeNull();
+    // An event-less object is page variables and IS mirrored (see the member test).
   });
 });
 

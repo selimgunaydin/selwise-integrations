@@ -1,5 +1,5 @@
 import { APP_STYLE_TABLE } from '../vendor/app-style.js';
-import { stripFrameOf, dotGeometry } from './strip-frame.js';
+import { stripFrameOf, dotGeometry, STRIP_PHONE_PADDING } from './strip-frame.js';
 
 /**
  * The strip's frame: its heading, container and page dots, as the style table
@@ -49,6 +49,16 @@ describe('the strip frame', () => {
     expect(frame.container).toMatchObject({ alignSelf: 'center', width: '100%', maxWidth: 1200 });
     // No auto margin: the container already stretches, nothing is added.
     expect(stripFrameOf({ id: 'w', containerStyles: { padding: '10px', margin: '4px 8px' } }, ctx).container).not.toHaveProperty('width');
+  });
+
+  it('draws a stored padding as typed, and a strip with none at the phone inset', () => {
+    const container = (containerStyles?: unknown) => stripFrameOf({ id: 'w', containerStyles }, ctx).container;
+    expect(container({ padding: '40px 20px' })).toMatchObject({ paddingVertical: 40, paddingHorizontal: 20 });
+    expect(container({ padding: '8px' })).toMatchObject({ padding: 8 });
+    expect(container({ padding: '0px' })).toMatchObject({ padding: 0 });
+    expect(container({ padding: '0px' })).not.toHaveProperty('paddingVertical');
+    expect(container()).toMatchObject({ paddingVertical: STRIP_PHONE_PADDING.vertical, paddingHorizontal: STRIP_PHONE_PADDING.horizontal });
+    expect(container({ backgroundColor: '#fff' })).toMatchObject({ paddingVertical: 16, paddingHorizontal: 16 });
   });
 
   it('drops a maximum width of auto, which RN does not take', () => {

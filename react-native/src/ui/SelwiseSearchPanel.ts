@@ -595,6 +595,15 @@ function Ready(props: ReadyProps): ReactElement {
     );
   };
 
+  // The keyboard's search key is a SUBMISSION: a merchant's redirect rule for the
+  // term wins over the results page ("view all"), and the term enters the recent
+  // searches. Typing did neither.
+  const submitTerm = () => {
+    if (!term) return;
+    const redirecting = search.submit();
+    if (!redirecting && viewAllShown) openViewAll();
+  };
+
   const input = props.controlled
     ? null
     : typeof props.renderInput === 'function'
@@ -602,7 +611,7 @@ function Ready(props: ReadyProps): ReactElement {
           value: search.query,
           onChangeText: setQuery,
           onClear: clearQuery,
-          onSubmit: () => (viewAllShown && term ? openViewAll() : undefined),
+          onSubmit: submitTerm,
           placeholder: t('placeholder'),
           clearLabel: t('clear'),
           autoFocus: props.autoFocus,
@@ -611,7 +620,7 @@ function Ready(props: ReadyProps): ReactElement {
           value: search.query,
           onChangeText: setQuery,
           onClear: clearQuery,
-          onSubmit: () => (viewAllShown && term ? openViewAll() : undefined),
+          onSubmit: submitTerm,
           onClose: props.onClose,
           onBack: props.onBack,
           backLabel: props.backLabel ?? t('close'),

@@ -1,6 +1,7 @@
 import type { Surface } from '../core/surfaces.js';
 import type { GoalBarView } from '../vendor/dynamic-content.js';
-import { countdownTargetOf, remainingParts, type CountdownResolver } from './countdown.js';
+import { countdownTargetOf, type CountdownResolver } from './countdown.js';
+import { countdownMissOf } from '../vendor/dynamic-content.js';
 import { resolveCustomCode } from './custom-widget-document.js';
 import { socialProofMinCount, socialProofShown } from '../vendor/social-proof.js';
 import { isModal } from './triggers.js';
@@ -125,9 +126,9 @@ export function renderVerdict(
     // An expired countdown is not a surface; rendering a dash would tell the
     // visitor the offer is live when it is over.
     const now = typeof opts.now === 'number' ? opts.now : Date.now();
-    return remainingParts(countdownTargetOf(content, now, opts.countdownTarget), now) !== null
-      ? null
-      : { reason: 'content', detail: { cause: 'countdown_over' } };
+    // The widget's verdict, the same words (`countdownMissOf`): no end at all is `no_end`.
+    const miss = countdownMissOf(countdownTargetOf(content, now, opts.countdownTarget), now);
+    return miss === null ? null : { reason: 'content', detail: { cause: miss } };
   }
 
   return null;

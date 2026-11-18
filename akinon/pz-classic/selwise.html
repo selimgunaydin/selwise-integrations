@@ -4,63 +4,42 @@
 
   Install
   -------
-  1. Copy this file to `templates/layout/selwise.html`.
-  2. Copy `selwise-ee-shim.js` and `selwise-basket-hook.js` to
-     `templates/utils/` (or paste their bodies inline where marked below).
-  3. Include it in `templates/layout/base.html` inside `<head>`, ABOVE the GTM
-     snippet and above the `window["dataLayer"] = ...` initialiser:
+  1. Copy this file to `templates/layout/selwise.html` (older themes keep their
+     layout in `templates/base.html`; use the same folder as that file).
+  2. Copy `selwise-basket-hook.js` to `templates/utils/`.
+  3. Include it FIRST inside `<head>` of the base layout, above the GTM snippet
+     and the `window["dataLayer"] = ...` initialiser:
 
          {% include "layout/selwise.html" %}
 
-  Ordering matters. The shim wraps `dataLayer.push`, and the analytics adapters
-  buffer events until GTM loads and then flush them all at once. Running first
-  means nothing is missed — though the shim also replays whatever is already in
-  the array, so a slipped ordering degrades gracefully rather than losing data.
+     A theme with several base layouts (one per brand or site display) needs
+     the include in each of them.
+  4. If the site sends a Content-Security-Policy, allow
+     `https://widget.selwise.com` in script-src and style-src and
+     `https://api.selwise.com` in connect-src, or nothing below loads.
 
   Panel configuration this include assumes
   ----------------------------------------
-  Integrations → Data Layer:
-    • Platform                = akinon
-    • Source variable name    = selwiseLayer     ← NOT dataLayer
-    • Page patterns           = shared/page-patterns.json
-  Sites → Installation:
-    • the site key below, and a verified domain
+  Integrations → Data Layer Configuration: Enable Data Layer on (it is off by
+  default), E-commerce Platform Preset = Akinon, Use External Data Layer on,
+  External Data Layer Name = `dataLayer`. The Akinon preset reads
+  Project Zero's Enhanced Ecommerce events (`eeEvent`, `eeCart`, `eeCheckout`)
+  and GA4 names from the store's own `dataLayer` — no translation layer needed.
 
-  Why `selwiseLayer` and not `dataLayer`: the shim renames PZ's ambiguous
-  `eeEvent` / `eeCart` events to their GA4 equivalents. Writing those back into
-  `dataLayer` would feed the merchant's own GTM container and double-count every
-  hit, so they go into a private layer that only Selwise reads. See
-  `selwise-ee-shim.js` for the full reasoning.
+  Only for a theme that cannot take the preset (see `selwise-ee-shim.js`):
+  add the shim and point the panel at `selwiseLayer` instead —
+
+      <script>window.selwiseLayer = window.selwiseLayer || [];</script>
+      <script>{% include "utils/selwise-ee-shim.js" %}</script>
 #}
 
 {# The Selwise head bootstrap: the command queue plus the code that hides what a
    page experiment is about to change BEFORE the page paints. It must be the
    FIRST thing this include prints (and this include the first thing in `<head>`):
    below the first paint it can only follow a flash. Replace REPLACE_WITH_SITE_KEY,
-   and copy the current version from the Selwise dashboard (Channels → the
-   channel → Install) when it changes. #}
+   and copy the current version from the Selwise dashboard (the channel's
+   installation code) when it changes. #}
 <script data-selwise-boot="2">window.Selwise=window.Selwise||{};window.Selwise.q=window.Selwise.q||[];['track','trackOrder','identify','setTraits','pushDataLayer','grantConsent','revokeConsent','showConsentPreferences','withdrawConsent','endJourney'].forEach(function(m){if(!window.Selwise[m])window.Selwise[m]=function(){window.Selwise.q.push([m,arguments])}});(function(w,d,k){if(w.__selwise_ph)return;var P=w.__selwise_ph={v:2,s:[],ids:[],dl:1000},st,pf=w.performance;P.hid=function(x){return!P.r&&!!P.h&&(!!P.pg||P.s.indexOf(x)>-1)};P.reveal=function(r){if(P.r)return;P.r=r||'deadline';if(st&&st.parentNode)st.parentNode.removeChild(st);if(P.on)try{P.on(P.r)}catch(e){}};try{var p=JSON.parse(localStorage.getItem('selwise_prehide_'+k)||'null'),t=Date.now(),h=location.href,c=[],x='',i,j,o,hd=d.head||d.documentElement,A=function(l){if(l)for(var n=0;n<l.length;n++)try{if(new RegExp(l[n][0]).test(l[n][1]==2?location.pathname:l[n][1]?h.toLowerCase():h))return 1}catch(e){}return 0},M=function(o){return!o.r||!A(o.r.x)&&(o.r.a==1||A(o.r.i))};if(!p||!p.e||!(t-p.w>=0&&t-p.w<604800000))return;if(p.u&&w.fetch){P.u=p.u;P.cfg=fetch(p.u,{method:'GET'})}for(i=0;i<p.e.length;i++){o=p.e[i];if(!o||!o.s||!M(o))continue;P.ids.push(o.id);if(o.k=='p')P.pg=1;for(j=0;j<o.s.length;j++)if(P.s.indexOf(o.s[j])<0)P.s.push(o.s[j])}if(p.c)for(i=0;i<p.c.length;i++){o=p.c[i];if(o&&o.css&&M(o))c.push(o.css)}if(c.length){o=d.createElement('style');o.id='selwise-prehide-css';o.textContent=c.join('\n');hd.appendChild(o)}if(P.pg)x='html{opacity:0!important}';for(i=0;i<P.s.length;i++)x+=P.s[i]+'{visibility:hidden!important}';if(!x)return;st=d.createElement('style');st.id='selwise-prehide';st.textContent=x;hd.appendChild(st);P.h=1;P.t0=pf&&pf.now?pf.now():0;setTimeout(function(){P.reveal('deadline')},Math.max(0,P.dl-P.t0))}catch(e){P.reveal('engine_error')}})(window,document,"REPLACE_WITH_SITE_KEY");</script>
-
-<script>
-  {# The private layer must exist before the shim or the widget touches it. #}
-  window.selwiseLayer = window.selwiseLayer || [];
-</script>
-
-{# Enhanced Ecommerce disambiguation. Inline rather than a static file so it is
-   never subject to a CDN cache miss on first paint — it must run before the
-   adapters flush. #}
-<script>{% include "utils/selwise-ee-shim.js" %}</script>
-
-{# Product identity for the PDP.
-   Selwise's DOM reader prefers JSON-LD `sku`, which `cms/seo/product_seo.html`
-   already emits, so this block is a fallback for pages where the SEO include is
-   suppressed. `product.sku` is the variant code and MUST be the same value the
-   product feed carries as `item_code`. #}
-{% if product is defined and product.sku %}
-  <script>
-    window.selwiseProduct = { code: {{ product.sku|tojson|safe }} };
-  </script>
-{% endif %}
 
 {# The widget itself. Loaded async and last: 19.9 KB gzip entry, everything
    heavy is a lazy chunk, so it does not compete with the above-the-fold bundle. #}

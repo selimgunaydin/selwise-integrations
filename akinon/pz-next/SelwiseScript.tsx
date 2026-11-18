@@ -3,13 +3,13 @@
  *
  * ## When you need this file
  *
- * You usually do NOT. The preferred install needs no code at all: PZ Next's
- * root layout already prints the raw `head`/`body` HTML of an Omnitron CMS
- * widget called `external-gtm`, so the plain script tag can be pasted there and
- * shipped without a deploy.
- *
- *   pz_next_project/src/app/[commerce]/[locale]/[currency]/layout.tsx
- *     const data = await getWidgetData({ slug: 'external-gtm' });
+ * You usually do NOT. The preferred install needs no code at all: add the
+ * Selwise tag in the store's Google Tag Manager container. Some projects also
+ * print an Omnitron CMS widget's script in their root layout (its slug differs
+ * per project, e.g. `external-gtm` or `pznext-external-gtm`); where one exists,
+ * the tag can go there and ship without a deploy. Read your own root layout
+ * (`src/app/[commerce]/[locale]/[currency]/layout.tsx` on @akinon/next 1.x,
+ * `src/app/[pz]/layout.tsx` on 2.x) to see whether it does.
  *
  * Use this component when the project wants Selwise in source control instead —
  * or when the market→site-key mapping below is easier to review as code than as
@@ -18,7 +18,9 @@
  * ## Install
  *
  * Copy into `src/components/selwise-script.tsx`, fill in SITE_KEYS, then render
- * it inside `<head>` of the root layout, next to the GTM `<Script>`:
+ * it inside `<head>` of the root layout, next to the GTM `<Script>`. It is an
+ * async server component (`await headers()`), which is what Next.js 15 and 16
+ * (@akinon/next 2.x) require and what Next.js 14 (1.x) accepts:
  *
  *   import SelwiseScript from '@theme/components/selwise-script';
  *   ...
@@ -37,10 +39,10 @@ import { headers } from 'next/headers';
  * Production hostname → Selwise site key.
  *
  * One entry per market. A Selwise site carries one domain, one currency and one
- * product feed, so a multi-market deployment needs one site per market — and
- * `external-gtm` is fetched without locale/currency, so the snippet itself
- * cannot vary. Resolving by host is what makes a single snippet correct for
- * `pz_next_project`'s 7 markets.
+ * product feed, so a multi-market deployment needs one site per market — and a
+ * CMS widget is fetched without locale/currency, so the snippet itself cannot
+ * vary. Resolving by host is what makes a single snippet correct for a
+ * deployment that serves several markets.
  *
  * A host that is not listed loads nothing. That is deliberate: falling back to
  * a default key would file a staging visit as production revenue.
@@ -90,11 +92,11 @@ function resolveSiteKey(host: string | null): string | null {
   return best;
 }
 
-export default function SelwiseScript() {
-  // `pz-url` is set by @akinon/next's middleware; `host` is the fallback for
-  // requests that bypass it.
-  const requestHeaders = headers();
-  const host = requestHeaders.get('host');
+export default async function SelwiseScript() {
+  // Behind a proxy or CDN the public host is `x-forwarded-host`; `host` is the
+  // fallback for requests that reach the app directly.
+  const requestHeaders = await headers();
+  const host = (requestHeaders.get('x-forwarded-host') || requestHeaders.get('host') || '').split(',')[0].trim();
   const siteKey = resolveSiteKey(host);
 
   if (!siteKey) return null;
