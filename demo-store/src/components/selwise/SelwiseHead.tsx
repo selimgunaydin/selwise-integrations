@@ -20,7 +20,7 @@ export function SelwiseHead() {
   const widgetOrigin = new URL(cfg.widgetUrl).origin;
   const apiOrigin = new URL(cfg.apiUrl).origin;
   // The store's own data layer array, created beside the bootstrap.
-  const bootstrap = `${headBootstrap(cfg.siteKey)}window.selwiseLayer=window.selwiseLayer||[];`;
+  const bootstrap = `${headBootstrap(cfg.siteKey, cfg.apiUrl)}window.selwiseLayer=window.selwiseLayer||[];`;
   return (
     <>
       <script data-selwise-boot={HEAD_BOOTSTRAP_VERSION} dangerouslySetInnerHTML={{ __html: bootstrap }} />
